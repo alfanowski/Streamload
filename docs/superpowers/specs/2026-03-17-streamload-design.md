@@ -2,7 +2,7 @@
 
 **Date:** 2026-03-17
 **Status:** Draft
-**Version:** 1.0
+**Version:** 1.2
 
 ## Overview
 
@@ -189,7 +189,7 @@ class ServiceBase(ABC):
     def get_episodes(self, season: Season) -> list[Episode]: ...
 
     @abstractmethod
-    def get_streams(self, episode: Episode) -> StreamBundle: ...
+    def get_streams(self, item: Episode | MediaEntry) -> StreamBundle: ...
 ```
 
 ### ServiceRegistry
@@ -205,13 +205,17 @@ class ServiceRegistry:
         return service_class
 
     @classmethod
-    def get_all(cls) -> list[ServiceBase]: ...
+    def get_all(cls) -> list[type[ServiceBase]]: ...
 
     @classmethod
-    def get_by_category(cls, cat: ServiceCategory) -> list[ServiceBase]: ...
+    def get_by_category(cls, cat: ServiceCategory) -> list[type[ServiceBase]]: ...
 
     @classmethod
-    def search_all(cls, query: str) -> list[SearchResult]: ...
+    def instantiate_all(cls, http_client, config) -> dict[str, ServiceBase]:
+        """Instantiate all registered service classes. Called once at startup."""
+
+    @classmethod
+    def search_all(cls, query: str, instances: dict[str, ServiceBase]) -> list[SearchResult]: ...
 ```
 
 ### Adding a New Service
@@ -249,28 +253,9 @@ class ServiceRegistry:
 
 The core never prints or reads input. It communicates through typed event callbacks:
 
+The core emits typed events (see Data Models section for full definitions). The CLI consumes them via the `EventCallbacks` interface:
+
 ```python
-# Events emitted by core
-@dataclass
-class DownloadProgress:
-    filename: str
-    downloaded: int
-    total: int
-    speed: float
-
-@dataclass
-class TrackSelection:
-    video_tracks: list[VideoTrack]
-    audio_tracks: list[AudioTrack]
-    subtitle_tracks: list[SubtitleTrack]
-
-@dataclass
-class DownloadComplete:
-    filepath: Path
-    duration: float
-    size: int
-
-# Callback interface
 class EventCallbacks(ABC):
     def on_track_selection(self, event: TrackSelection) -> SelectedTracks: ...
     def on_progress(self, event: DownloadProgress): ...
@@ -568,9 +553,11 @@ Each service that requires authentication implements an `authenticate()` method 
 class ServiceBase(ABC):
     requires_login: bool = False
 
-    def authenticate(self, credentials: dict) -> AuthSession:
-        """Returns session cookies/tokens. Called once, cached for session."""
-        raise NotImplementedError  # Only services with requires_login=True implement this
+    def authenticate(self, credentials: dict) -> AuthSession | None:
+        """Returns session cookies/tokens. Called once, cached for session.
+           Default: returns None (no auth needed). Override in services
+           with requires_login=True."""
+        return None
 
     @abstractmethod
     def search(self, query: str) -> list[MediaEntry]: ...
@@ -580,6 +567,16 @@ class ServiceBase(ABC):
 - **If credentials missing:** the service is still listed but warns "credentials required" when selected
 - **If credentials invalid/expired:** clear error message with instructions to update `login.json`
 - **Session caching:** auth tokens/cookies are cached in memory for the session lifetime, never written to disk
+
+### AuthSession Model
+
+```python
+@dataclass
+class AuthSession:
+    cookies: dict[str, str]      # Session cookies
+    headers: dict[str, str]      # Auth headers (e.g., Bearer token)
+    expires_at: float | None     # Unix timestamp, None = session-only
+```
 
 ### Security
 
@@ -691,7 +688,7 @@ class Episode:
 @dataclass
 class SearchResult:
     entry: MediaEntry
-    service_name: str
+    service_display_name: str    # "StreamingCommunity" (display), vs entry.service "sc" (short)
     match_score: float           # 0.0-1.0 fuzzy match
 ```
 
