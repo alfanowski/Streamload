@@ -325,7 +325,7 @@ class AppConfig:
 **NetworkConfig:**
 - `timeout` (default: 30s)
 - `max_retry` (default: 8)
-- `verify_ssl` (default: false)
+- `verify_ssl` (default: true)
 - `proxy` (optional, "http://host:port")
 
 ### Validation
@@ -338,7 +338,7 @@ Every field has a type and constraints. Invalid values trigger a warning log and
 
 ### System Language Auto-Detection
 
-On startup, `locale.getdefaultlocale()` detects the OS language:
+On startup, `locale.getlocale()` (or `locale.getdefaultlocale()` as fallback) detects the OS language:
 - `it_IT` → Italian interface + `preferred_audio="ita|it"` + `preferred_subtitle="ita|it"`
 - `en_US` (or any non-Italian) → English interface + `preferred_audio="eng|en"` + `preferred_subtitle="eng|en"`
 
@@ -501,7 +501,7 @@ Structured logging to file (`streamload.log`) with automatic rotation. The termi
 
 | Package | Purpose |
 |---------|---------|
-| httpx>=0.27 | Async HTTP client |
+| httpx>=0.27 | HTTP client (sync mode) |
 | curl_cffi>=0.7 | Anti-bot / Cloudflare bypass |
 | beautifulsoup4>=4.12 | HTML parsing |
 | rich>=13.0 | Terminal UI (tables, progress, colors) |
@@ -536,3 +536,321 @@ Structured logging to file (`streamload.log`) with automatic rotation. The termi
 - **FFmpeg detection:** OS-specific binary location strategies
 - **Encoding:** UTF-8 throughout, `unidecode` for filename sanitization
 - **Tested on:** macOS, Linux (Ubuntu/Debian/Fedora), Windows 10/11
+- **Windows console:** On `cmd.exe` (Windows 10), virtual terminal processing is enabled via `SetConsoleMode`. Windows Terminal works natively. If alternate screen is unsupported, falls back to `cls`/clear.
+
+---
+
+## Authentication
+
+### Credential Storage
+
+Credentials are stored in `login.json` (plaintext JSON, gitignored). Structure:
+
+```json
+{
+  "TMDB": {
+    "api_key": ""
+  },
+  "SERVICES": {
+    "crunchyroll": {
+      "username": "",
+      "password": ""
+    }
+  }
+}
+```
+
+### Auth Flow per Service
+
+Each service that requires authentication implements an `authenticate()` method in its `ServiceBase` subclass:
+
+```python
+class ServiceBase(ABC):
+    requires_login: bool = False
+
+    def authenticate(self, credentials: dict) -> AuthSession:
+        """Returns session cookies/tokens. Called once, cached for session."""
+        raise NotImplementedError  # Only services with requires_login=True implement this
+
+    @abstractmethod
+    def search(self, query: str) -> list[MediaEntry]: ...
+```
+
+- **On startup:** if a service has `requires_login=True` and credentials are present in `login.json`, it authenticates and caches the session
+- **If credentials missing:** the service is still listed but warns "credentials required" when selected
+- **If credentials invalid/expired:** clear error message with instructions to update `login.json`
+- **Session caching:** auth tokens/cookies are cached in memory for the session lifetime, never written to disk
+
+### Security
+
+- `login.json` is included in `.gitignore` by default
+- A `login.json.example` with empty fields is provided for reference
+- No encryption (user is responsible for file system security, same approach as VibraVid)
+
+---
+
+## DRM Workflow
+
+### Key Resolution Chain
+
+```
+Content requires DRM decryption
+│
+├─ 1. Extract PSSH from manifest (MPD/m3u8)
+│
+├─ 2. Check local vault (SQLite)
+│  ├─ Key found → use cached key, skip to step 5
+│  └─ Key not found → continue to step 3
+│
+├─ 3. Request key from remote CDM server
+│  ├─ Build challenge from PSSH + CDM device info
+│  ├─ Send to service's license URL → get license response
+│  ├─ Send license response to CDM server → get decryption keys
+│  └─ If server unavailable → try local CDM (step 4)
+│
+├─ 4. Fallback: local CDM device files
+│  ├─ If device files present in data/ → use pywidevine/pyplayready locally
+│  └─ If no device files → DRMError with clear message
+│
+├─ 5. Decrypt content segments with obtained key
+│
+└─ 6. Cache key in local vault for future use
+```
+
+### Vault Schema (SQLite)
+
+```sql
+CREATE TABLE drm_keys (
+    id INTEGER PRIMARY KEY,
+    pssh TEXT NOT NULL,           -- PSSH box (base64)
+    kid TEXT NOT NULL,            -- Key ID (hex)
+    key TEXT NOT NULL,            -- Content key (hex)
+    drm_type TEXT NOT NULL,       -- "widevine" | "playready"
+    service TEXT NOT NULL,        -- service short_name
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(kid, drm_type)
+);
+```
+
+### DRM Type Selection
+
+The DRM type (Widevine vs PlayReady) is determined by the service's extractor. Each service knows which DRM system its content uses. The `DRMManager` routes to the appropriate handler based on the DRM type indicated in the manifest.
+
+### CDM Server Configuration (config.json)
+
+```json
+"drm": {
+    "widevine": {
+        "device_type": "ANDROID",
+        "system_id": 22590,
+        "security_level": 3,
+        "host": "https://cdrm-project.com/remotecdm/widevine",
+        "secret": "CDRM",
+        "device_name": "public"
+    },
+    "playready": {
+        "host": "https://cdrm-project.com/remotecdm/playready",
+        "secret": "CDRM",
+        "device_name": "public"
+    }
+}
+```
+
+---
+
+## Data Models
+
+### Media Models (`models/media.py`)
+
+```python
+@dataclass
+class MediaEntry:
+    id: str
+    title: str
+    type: MediaType              # FILM | SERIE | ANIME
+    year: int | None
+    genre: str | None
+    image_url: str | None
+    service: str                 # service short_name
+    url: str                     # source URL on the service
+
+@dataclass
+class Season:
+    number: int
+    episode_count: int
+    title: str | None
+
+@dataclass
+class Episode:
+    number: int
+    season_number: int
+    title: str
+    url: str
+    duration: int | None         # seconds
+
+@dataclass
+class SearchResult:
+    entry: MediaEntry
+    service_name: str
+    match_score: float           # 0.0-1.0 fuzzy match
+```
+
+### Stream Models (`models/stream.py`)
+
+```python
+@dataclass
+class VideoTrack:
+    id: str
+    resolution: str              # "1920x1080"
+    codec: str                   # "h264", "h265", "av1"
+    bitrate: int | None          # bps
+    fps: float | None
+    hdr: bool = False
+
+@dataclass
+class AudioTrack:
+    id: str
+    language: str                # ISO 639 code: "ita", "eng"
+    codec: str                   # "aac", "opus", "eac3"
+    channels: str                # "2.0", "5.1"
+    bitrate: int | None
+
+@dataclass
+class SubtitleTrack:
+    id: str
+    language: str                # ISO 639 code
+    format: str                  # "srt", "vtt", "ass"
+    forced: bool = False
+
+@dataclass
+class StreamBundle:
+    video: list[VideoTrack]
+    audio: list[AudioTrack]
+    subtitles: list[SubtitleTrack]
+    drm_type: str | None         # "widevine" | "playready" | None
+    pssh: str | None             # PSSH box if DRM
+    license_url: str | None      # License server URL if DRM
+
+@dataclass
+class SelectedTracks:
+    video: VideoTrack
+    audio: list[AudioTrack]
+    subtitles: list[SubtitleTrack]
+```
+
+### Event Models (`core/events.py`)
+
+```python
+@dataclass
+class DownloadProgress:
+    download_id: str             # Unique ID for concurrent download disambiguation
+    filename: str
+    downloaded: int
+    total: int
+    speed: float                 # bytes/sec
+
+@dataclass
+class TrackSelection:
+    video_tracks: list[VideoTrack]
+    audio_tracks: list[AudioTrack]
+    subtitle_tracks: list[SubtitleTrack]
+
+@dataclass
+class DownloadComplete:
+    download_id: str
+    filepath: Path
+    duration: float
+    size: int
+
+@dataclass
+class ErrorEvent:
+    download_id: str | None
+    error: StreamloadError
+    message: str
+    recoverable: bool
+
+@dataclass
+class WarningEvent:
+    message: str
+    context: str | None
+```
+
+---
+
+## Service Auto-Discovery Mechanism
+
+On startup, `ServiceRegistry` imports all service modules via an explicit import list in `services/__init__.py`:
+
+```python
+# services/__init__.py
+from streamload.services import (
+    animeunity, animeworld, crunchyroll, discovery, dmax,
+    foodnetwork, guardaserie, homegardentv, mediasetinfinity,
+    mostraguarda, nove, raiplay, realtime, streamingcommunity, tubitv,
+)
+```
+
+Each service module's `__init__.py` contains the `@ServiceRegistry.register` decorated class. The import triggers registration. Adding a new service requires: (1) create the module, (2) add one import line. This is explicit and predictable, unlike VibraVid's filesystem-scanning approach.
+
+---
+
+## Concurrency Model
+
+The download pipeline uses **threading** (not asyncio) for simplicity and compatibility:
+
+- `httpx` is used in **sync mode** (not async)
+- `DownloadManager` uses `concurrent.futures.ThreadPoolExecutor` for parallel downloads
+- Each download uses a separate `ThreadPoolExecutor` for segment parallelism
+- `max_concurrent` controls the outer pool (default: 3 downloads)
+- `thread_count` controls the inner pool (default: 8 threads per download)
+
+This avoids the complexity of async while providing sufficient concurrency for I/O-bound download work. The bottleneck is network bandwidth, not thread overhead.
+
+---
+
+## Retry Configuration Clarification
+
+Two separate retry settings exist for different layers:
+
+| Setting | Scope | Default | Purpose |
+|---------|-------|---------|---------|
+| `download.retry_count` | Segment level | 25 | Retries for individual video/audio segment downloads (HLS/DASH) |
+| `network.max_retry` | HTTP level | 8 | Retries for general HTTP requests (search, API calls, manifest fetches) |
+
+Segment downloads have higher retry tolerance because a single failed segment in a 500-segment stream should not abort the entire download.
+
+---
+
+## Output Template Variables
+
+### Movie format (default: `{title} ({year})`)
+
+| Variable | Example |
+|----------|---------|
+| `{title}` | "The Matrix" |
+| `{year}` | "1999" |
+
+### Episode format (default: `{series}/S{season:02d}/{title} S{season:02d}E{episode:02d}`)
+
+| Variable | Example |
+|----------|---------|
+| `{series}` | "Breaking Bad" |
+| `{season}` | 1 (supports format spec: `{season:02d}` → "01") |
+| `{episode}` | 3 (supports format spec: `{episode:02d}` → "03") |
+| `{title}` | "...And the Bag's in the River" |
+
+### Speed limit format
+
+`max_speed` accepts: `"10MB"` (megabytes/sec), `"500KB"` (kilobytes/sec), or `null`/empty for unlimited.
+
+---
+
+## Film-Only Services
+
+Services categorized as `FILM` (e.g., MostraGuarda) implement `get_seasons()` and `get_episodes()` to return empty lists. The `get_streams()` method accepts both `Episode` and `MediaEntry` via a union type:
+
+```python
+def get_streams(self, item: Episode | MediaEntry) -> StreamBundle: ...
+```
+
+For films, the CLI skips the season/episode selection and passes the `MediaEntry` directly to `get_streams()`.
