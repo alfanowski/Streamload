@@ -246,7 +246,7 @@ class SystemChecker:
         binary: str,
         fallback_paths: dict[str, list[str]],
     ) -> str | None:
-        """Find a binary on ``$PATH`` or in well-known fallback locations.
+        """Find a binary on ``$PATH``, via imageio-ffmpeg, or in well-known fallback locations.
 
         Returns the first valid path found, or ``None``.
         """
@@ -255,7 +255,22 @@ class SystemChecker:
         if path is not None:
             return path
 
-        # 2. Probe OS-specific fallback paths.
+        # 2. Try imageio-ffmpeg bundled binary (installed via pip).
+        if binary in ("ffmpeg", "ffprobe"):
+            try:
+                import imageio_ffmpeg
+                bundled = imageio_ffmpeg.get_ffmpeg_exe()
+                if bundled and Path(bundled).is_file():
+                    if binary == "ffmpeg":
+                        return bundled
+                    # ffprobe is in the same directory as ffmpeg
+                    ffprobe_path = Path(bundled).parent / ("ffprobe" + Path(bundled).suffix)
+                    if ffprobe_path.is_file():
+                        return str(ffprobe_path)
+            except (ImportError, Exception):
+                pass
+
+        # 3. Probe OS-specific fallback paths.
         current_os = SystemChecker.get_os()
         for candidate in fallback_paths.get(current_os, []):
             if Path(candidate).is_file():

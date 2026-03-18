@@ -199,9 +199,19 @@ class ServiceRegistry:
 
         all_results: list[SearchResult] = []
 
+        # Per-service timeout in seconds.  If a service's search takes
+        # longer than this it is skipped rather than blocking forever.
+        per_service_timeout = 15
+
         def _search_one(service: ServiceBase) -> list[SearchResult]:
             """Run a single service's search and wrap entries as SearchResult."""
-            entries = service.search(query)
+            try:
+                entries = service.search(query)
+            except Exception as exc:
+                logger.warning(
+                    "Search error in %s: %s", service.name, exc,
+                )
+                return []
             return [
                 SearchResult(
                     entry=entry,
@@ -220,28 +230,43 @@ class ServiceRegistry:
                 future = pool.submit(_search_one, service)
                 future_to_name[future] = short_name
 
-            for future in as_completed(future_to_name):
-                short_name = future_to_name[future]
-                service = instances[short_name]
-                try:
-                    results = future.result()
-                    all_results.extend(results)
-                    logger.debug(
-                        "Search complete for %s: %d result(s)",
-                        service.name,
-                        len(results),
-                    )
-                    if on_progress is not None:
-                        on_progress(service.name, "ok", len(results))
-                except Exception:
-                    logger.error(
-                        "Search failed for %s (%s)",
-                        service.name,
-                        short_name,
-                        exc_info=True,
-                    )
-                    if on_progress is not None:
-                        on_progress(service.name, "error", 0)
+            try:
+                for future in as_completed(future_to_name, timeout=per_service_timeout * 2):
+                    short_name = future_to_name[future]
+                    service = instances[short_name]
+                    try:
+                        results = future.result(timeout=per_service_timeout)
+                        all_results.extend(results)
+                        logger.debug(
+                            "Search complete for %s: %d result(s)",
+                            service.name,
+                            len(results),
+                        )
+                        if on_progress is not None:
+                            on_progress(service.name, "ok", len(results))
+                    except TimeoutError:
+                        logger.warning(
+                            "Search timed out for %s (%s) after %ds",
+                            service.name,
+                            short_name,
+                            per_service_timeout,
+                        )
+                        if on_progress is not None:
+                            on_progress(service.name, "timeout", 0)
+                    except Exception:
+                        logger.error(
+                            "Search failed for %s (%s)",
+                            service.name,
+                            short_name,
+                            exc_info=True,
+                        )
+                        if on_progress is not None:
+                            on_progress(service.name, "error", 0)
+            except TimeoutError:
+                logger.warning("Global search timed out after %ds", per_service_timeout * 2)
+                # Cancel any remaining futures
+                for future in future_to_name:
+                    future.cancel()
 
         # Best matches first.
         all_results.sort(key=lambda r: r.match_score, reverse=True)
