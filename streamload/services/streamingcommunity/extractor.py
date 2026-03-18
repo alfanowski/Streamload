@@ -1,13 +1,14 @@
 """Stream URL extraction for StreamingCommunity via VixCloud.
 
 Orchestrates the VixCloud player module to resolve HLS master playlist
-URLs for both films and series episodes, and wraps the result in a
-:class:`~streamload.models.stream.StreamBundle`.
+URLs, fetches the manifest to enumerate tracks, and wraps everything in
+a :class:`~streamload.models.stream.StreamBundle`.
 """
 
 from __future__ import annotations
 
 from streamload.core.exceptions import ServiceError
+from streamload.core.manifest.m3u8 import M3U8Parser
 from streamload.models.stream import StreamBundle
 from streamload.player import vixcloud
 from streamload.utils.http import HttpClient
@@ -16,6 +17,9 @@ from streamload.utils.logger import get_logger
 log = get_logger(__name__)
 
 _SERVICE_TAG = "streamingcommunity"
+
+# VixCloud requires same-origin referer for playlist requests.
+_VIXCLOUD_REFERER = "https://vixcloud.co/"
 
 
 def extract_streams(
@@ -27,39 +31,11 @@ def extract_streams(
 ) -> StreamBundle:
     """Resolve available streams for a title or episode.
 
-    Delegates to :func:`streamload.player.vixcloud.extract_playlist` to
-    walk the iframe -> VixCloud embed -> m3u8 chain, then wraps the
-    result in a :class:`StreamBundle`.
+    1. Walk the iframe -> VixCloud embed -> authenticated m3u8 chain.
+    2. Fetch the master m3u8 with the correct VixCloud referer.
+    3. Parse it to enumerate video/audio/subtitle tracks.
 
-    The returned bundle contains the raw ``manifest_url`` pointing at
-    the HLS master playlist.  Track enumeration (video variants, audio
-    tracks, subtitles) is deferred to the download engine which parses
-    the manifest at download time.
-
-    Parameters
-    ----------
-    http:
-        Shared HTTP client.
-    base_url:
-        Service base URL *including* the language prefix, e.g.
-        ``"https://streamingcommunity.prof/it"``.
-    media_id:
-        Service-internal numeric title ID.
-    episode_id:
-        Episode ID for series content.  ``None`` for films.
-
-    Returns
-    -------
-    StreamBundle
-        A bundle whose ``manifest_url`` is the authenticated HLS master
-        playlist.  The ``video``, ``audio``, and ``subtitles`` lists
-        are empty because the download engine parses the manifest itself.
-
-    Raises
-    ------
-    ServiceError
-        When no playable stream can be resolved (iframe missing, player
-        page changed, or the title is geo-blocked / unavailable).
+    Returns a fully-populated :class:`StreamBundle`.
     """
     content_label = (
         f"episode {episode_id} of title {media_id}"
@@ -83,4 +59,23 @@ def extract_streams(
 
     log.info("Resolved master playlist for %s: %s", content_label, playlist_url)
 
-    return StreamBundle(manifest_url=playlist_url)
+    # Fetch the master m3u8 -- VixCloud requires same-origin referer.
+    resp = http.get(playlist_url, headers={"Referer": _VIXCLOUD_REFERER})
+    resp.raise_for_status()
+
+    # Parse the master playlist to extract all tracks.
+    parser = M3U8Parser()
+    bundle = parser.parse_master(resp.text, playlist_url)
+
+    # Carry over the manifest URL so the downloader can re-fetch if needed.
+    bundle.manifest_url = playlist_url
+
+    log.info(
+        "Parsed tracks for %s: %d video, %d audio, %d subtitle",
+        content_label,
+        len(bundle.video),
+        len(bundle.audio),
+        len(bundle.subtitles),
+    )
+
+    return bundle

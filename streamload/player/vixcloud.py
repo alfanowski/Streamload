@@ -128,7 +128,7 @@ def get_iframe_url(
     url = f"{base_url}/iframe/{media_id}"
     log.debug("Fetching iframe page: %s  params=%s", url, params)
 
-    resp = http.get(url, params=params or None)
+    resp = http.get(url, params=params or None, use_curl=True)
     resp.raise_for_status()
 
     soup = BeautifulSoup(resp.text, "html.parser")
