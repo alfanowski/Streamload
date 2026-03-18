@@ -1,0 +1,11 @@
+{
+    "TMDB": {
+        "api_key": ""
+    },
+    "SERVICES": {
+        "crunchyroll": {
+            "device_id": "",
+            "etp_rt": ""
+        }
+    }
+}

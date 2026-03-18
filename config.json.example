@@ -1,0 +1,50 @@
+{
+    "language": "auto",
+    "preferred_audio": "auto",
+    "preferred_subtitle": "auto",
+    "auto_update": true,
+    "output": {
+        "root_path": "Video",
+        "movie_folder": "Movie",
+        "serie_folder": "Serie",
+        "anime_folder": "Anime",
+        "movie_format": "{title} ({year})",
+        "episode_format": "{series}/S{season:02d}/{title} S{season:02d}E{episode:02d}",
+        "extension": "mkv"
+    },
+    "download": {
+        "thread_count": 8,
+        "retry_count": 25,
+        "max_concurrent": 3,
+        "max_speed": null,
+        "cleanup_tmp": true
+    },
+    "process": {
+        "use_gpu": false,
+        "generate_nfo": false,
+        "merge_audio": true,
+        "merge_subtitle": true,
+        "subtitle_format": "auto"
+    },
+    "network": {
+        "timeout": 30,
+        "max_retry": 8,
+        "verify_ssl": true,
+        "proxy": null
+    },
+    "drm": {
+        "widevine": {
+            "device_type": "ANDROID",
+            "system_id": 22590,
+            "security_level": 3,
+            "host": "https://cdrm-project.com/remotecdm/widevine",
+            "secret": "CDRM",
+            "device_name": "public"
+        },
+        "playready": {
+            "host": "https://cdrm-project.com/remotecdm/playready",
+            "secret": "CDRM",
+            "device_name": "public"
+        }
+    }
+}
