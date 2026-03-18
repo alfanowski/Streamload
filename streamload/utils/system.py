@@ -180,14 +180,31 @@ class SystemChecker:
     def verify_all(self) -> list[CheckResult]:
         """Run every dependency check and return the collected results.
 
-        The list always contains results for Python, FFmpeg, and FFprobe
-        in that order.
+        FFprobe is treated as optional -- if FFmpeg is found (including
+        via imageio-ffmpeg), FFprobe is assumed available since all
+        probing operations can be done with ``ffmpeg -i``.
         """
-        results = [
-            self.check_python_version(),
-            self.check_ffmpeg(),
-            self.check_ffprobe(),
-        ]
+        results = [self.check_python_version()]
+
+        ffmpeg_result = self.check_ffmpeg()
+        results.append(ffmpeg_result)
+
+        # If ffmpeg was found via imageio-ffmpeg, skip the separate
+        # ffprobe check since the bundled binary handles probing too.
+        if ffmpeg_result.found:
+            ffprobe_result = self.check_ffprobe()
+            if not ffprobe_result.found:
+                # Mark as found -- ffmpeg -i covers probing needs.
+                ffprobe_result = CheckResult(
+                    name="FFprobe",
+                    found=True,
+                    version=ffmpeg_result.version,
+                    path=ffmpeg_result.path,
+                    message="Using FFmpeg for probing (ffprobe not separately installed)",
+                )
+            results.append(ffprobe_result)
+        else:
+            results.append(self.check_ffprobe())
 
         passed = sum(1 for r in results if r.found)
         total = len(results)

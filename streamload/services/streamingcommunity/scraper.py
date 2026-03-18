@@ -56,7 +56,7 @@ def _get_inertia_version(http: HttpClient, base_url: str, lang: str) -> str | No
     url = f"{base_url}/{lang}"
     log.debug("Fetching Inertia version from %s", url)
 
-    resp = http.get(url)
+    resp = http.get(url, use_curl=True)
     resp.raise_for_status()
 
     soup = BeautifulSoup(resp.text, "html.parser")
@@ -176,7 +176,7 @@ def search_titles(
 
         log.debug("Searching %s?q=%s", search_url, query)
         try:
-            resp = http.get(search_url, headers=inertia_headers, params={"q": query})
+            resp = http.get(search_url, headers=inertia_headers, params={"q": query}, use_curl=True)
             resp.raise_for_status()
         except Exception:
             log.error("Search request failed for lang=%s", lang, exc_info=True)
@@ -242,7 +242,7 @@ def get_title_seasons(
     url = f"{base_url}/{lang}/titles/{media_id}-{slug}"
     log.debug("Fetching title page: %s", url)
 
-    resp = http.get(url)
+    resp = http.get(url, use_curl=True)
     resp.raise_for_status()
 
     soup = BeautifulSoup(resp.text, "html.parser")
@@ -308,7 +308,7 @@ def get_season_episodes(
     }
 
     log.debug("Fetching season %d episodes: %s", season_number, url)
-    resp = http.get(url, headers=inertia_headers)
+    resp = http.get(url, headers=inertia_headers, use_curl=True)
     resp.raise_for_status()
 
     episodes: list[dict] = (
