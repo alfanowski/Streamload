@@ -229,6 +229,7 @@ class DownloadManager:
                 tracks=job.tracks,
                 output_dir=temp_dir,
                 callbacks=self._callbacks,
+                extra_headers=job.bundle.extra_headers if job.bundle else None,
             )
 
             if not downloaded_files:

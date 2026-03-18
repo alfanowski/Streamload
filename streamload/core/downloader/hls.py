@@ -45,6 +45,8 @@ class HLSDownloader(BaseDownloader):
         self._parser = M3U8Parser()
         # Cache encryption keys to avoid re-fetching for every segment.
         self._key_cache: dict[str, bytes] = {}
+        # Extra headers for segment/playlist requests (e.g. Referer for VixCloud).
+        self._extra_headers: dict[str, str] = {}
 
     # ------------------------------------------------------------------
     # Public API
@@ -56,6 +58,7 @@ class HLSDownloader(BaseDownloader):
         tracks: SelectedTracks,
         output_dir: Path,
         callbacks: EventCallbacks,
+        extra_headers: dict[str, str] | None = None,
     ) -> list[Path]:
         """Download HLS streams for every selected track.
 
@@ -75,6 +78,9 @@ class HLSDownloader(BaseDownloader):
         """
         output_dir.mkdir(parents=True, exist_ok=True)
         downloaded: list[Path] = []
+
+        # Store extra headers for use by segment download methods.
+        self._extra_headers = extra_headers or {}
 
         # -- Video track ---------------------------------------------------
         video = tracks.video
@@ -200,7 +206,7 @@ class HLSDownloader(BaseDownloader):
         init_data: bytes | None = None
         if init_url:
             try:
-                resp = self._http.get(init_url)
+                resp = self._http.get(init_url, headers=self._extra_headers or None)
                 resp.raise_for_status()
                 init_data = resp.content
             except Exception as exc:
@@ -344,7 +350,7 @@ class HLSDownloader(BaseDownloader):
         bytes
             Raw (or decrypted) segment content.
         """
-        headers: dict[str, str] = {}
+        headers: dict[str, str] = dict(self._extra_headers)
         if segment.byterange is not None:
             length, offset = segment.byterange
             end = offset + length - 1
@@ -464,7 +470,7 @@ class HLSDownloader(BaseDownloader):
         M3U8Playlist
             Parsed playlist with segment list.
         """
-        resp = self._http.get(playlist_url)
+        resp = self._http.get(playlist_url, headers=self._extra_headers or None)
         resp.raise_for_status()
         return self._parser.parse_media(resp.text, playlist_url)
 

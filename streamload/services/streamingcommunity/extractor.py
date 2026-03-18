@@ -67,8 +67,9 @@ def extract_streams(
     parser = M3U8Parser()
     bundle = parser.parse_master(resp.text, playlist_url)
 
-    # Carry over the manifest URL so the downloader can re-fetch if needed.
+    # Carry over the manifest URL and required headers for segment downloads.
     bundle.manifest_url = playlist_url
+    bundle.extra_headers = {"Referer": _VIXCLOUD_REFERER}
 
     log.info(
         "Parsed tracks for %s: %d video, %d audio, %d subtitle",

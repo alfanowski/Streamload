@@ -86,6 +86,7 @@ class StreamBundle:
     pssh: str | None = None  # PSSH box if DRM (base64)
     license_url: str | None = None  # License server URL if DRM
     manifest_url: str | None = None  # Original manifest URL
+    extra_headers: dict[str, str] = field(default_factory=dict)  # Headers required for segment downloads (e.g. Referer)
 
 
 @dataclass

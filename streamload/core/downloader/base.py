@@ -42,6 +42,7 @@ class BaseDownloader(ABC):
         tracks: SelectedTracks,
         output_dir: Path,
         callbacks: EventCallbacks,
+        extra_headers: dict[str, str] | None = None,
     ) -> list[Path]:
         """Download selected tracks to *output_dir*.
 
@@ -59,6 +60,9 @@ class BaseDownloader(ABC):
             Directory where downloaded files are written.
         callbacks:
             Event interface for progress reporting.
+        extra_headers:
+            Additional HTTP headers required for segment downloads
+            (e.g. Referer for VixCloud).
         """
         ...
 
