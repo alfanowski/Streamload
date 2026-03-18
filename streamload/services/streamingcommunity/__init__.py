@@ -50,7 +50,7 @@ class StreamingCommunityService(ServiceBase):
 
     name = "StreamingCommunity"
     short_name = "sc"
-    domains = ["streamingcommunity.computer"]
+    domains = ["streamingcommunityz.nl"]
     category = ServiceCategory.FILM_SERIE
     language = "it"
     requires_login = False
