@@ -15,6 +15,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -223,11 +224,18 @@ class N_m3u8dlDownloader:
         log.info("N_m3u8DL-RE command: %s", " ".join(cmd))
 
         try:
+            # Clear screen and show download header
+            sys.stdout.write("\033[2J\033[H")
+            sys.stdout.write(f"\n  \033[1;36mDownloading: {filename}\033[0m\n\n")
+            sys.stdout.flush()
+
             # Let N_m3u8DL-RE display its own progress directly to the terminal.
-            # Don't capture stdout - its native progress bars are better than
-            # anything we could render.
             proc = subprocess.Popen(cmd)
             proc.wait()
+
+            # Clear N_m3u8DL-RE output after completion
+            sys.stdout.write("\033[2J\033[H")
+            sys.stdout.flush()
 
             if proc.returncode != 0:
                 log.error("N_m3u8DL-RE exited with code %d", proc.returncode)
