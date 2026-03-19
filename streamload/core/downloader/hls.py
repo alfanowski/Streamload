@@ -259,11 +259,14 @@ class HLSDownloader(BaseDownloader):
                 completed_count += 1
                 elapsed = time.monotonic() - start_time
                 speed = downloaded_bytes / elapsed if elapsed > 0 else 0.0
+                # Estimate total size from average segment size so far.
+                avg_segment_size = downloaded_bytes / max(completed_count, 1)
+                estimated_total = int(avg_segment_size * total_segments)
                 callbacks.on_progress(DownloadProgress(
                     download_id=download_id,
                     filename=filename,
-                    downloaded=completed_count,
-                    total=total_segments,
+                    downloaded=downloaded_bytes,
+                    total=max(estimated_total, downloaded_bytes),
                     speed=speed,
                 ))
 
