@@ -58,6 +58,7 @@ class DASHDownloader(BaseDownloader):
         tracks: SelectedTracks,
         output_dir: Path,
         callbacks: EventCallbacks,
+        extra_headers: dict[str, str] | None = None,
     ) -> list[Path]:
         """Download DASH streams for every selected track.
 

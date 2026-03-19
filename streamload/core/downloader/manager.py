@@ -416,12 +416,19 @@ class DownloadManager:
         # Fallback: check video track IDs for format hints.
         if bundle.video:
             first_video_id = bundle.video[0].id.lower()
-            if "m3u8" in first_video_id:
+            if "m3u8" in first_video_id or "playlist" in first_video_id:
                 log.debug("Detected HLS stream from video track ID")
                 return self._hls
             if "mpd" in first_video_id:
                 log.debug("Detected DASH stream from video track ID")
                 return self._dash
+
+        # If audio/subtitle tracks have HLS-style playlist URLs, it's HLS.
+        if bundle.audio:
+            first_audio_id = bundle.audio[0].id.lower()
+            if "m3u8" in first_audio_id or "playlist" in first_audio_id:
+                log.debug("Detected HLS stream from audio track ID")
+                return self._hls
 
         log.debug("Defaulting to MP4 downloader")
         return self._mp4
