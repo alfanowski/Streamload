@@ -25,7 +25,6 @@ from streamload.cli.terminal import TerminalManager
 from streamload.cli.ui import (
     DownloadProgressUI,
     InteractiveSelector,
-    SearchResultTable,
     UIPrompts,
 )
 from streamload.core.downloader.manager import DownloadJob, DownloadManager
@@ -195,7 +194,6 @@ class StreamloadApp:
         self._vault: LocalVault | None = None
         self._download_mgr: DownloadManager | None = None
         self._prompts: UIPrompts | None = None
-        self._tables: SearchResultTable | None = None
         self._selector: InteractiveSelector | None = None
         self._updater: Updater | None = None
         self._progress_ui: DownloadProgressUI | None = None
@@ -247,10 +245,9 @@ class StreamloadApp:
         self._i18n = I18n(lang)
 
         # 3. UI
-        self._prompts = UIPrompts(self._console)
-        self._tables = SearchResultTable(self._console)
+        self._prompts = UIPrompts(self._console, self._i18n)
         self._selector = InteractiveSelector(self._console)
-        self._progress_ui = DownloadProgressUI(self._console)
+        self._progress_ui = DownloadProgressUI(self._console, self._i18n)
 
         # 4. System dependencies
         self._check_system_deps()
@@ -390,6 +387,7 @@ class StreamloadApp:
         Loops until the user selects Exit or presses Ctrl+C.
         """
         assert self._prompts is not None
+        assert self._selector is not None
         assert self._i18n is not None
 
         while True:
@@ -400,11 +398,17 @@ class StreamloadApp:
                     self._i18n.t("menu.settings"),
                     self._i18n.t("menu.exit"),
                 ]
-                selection = self._prompts.choose(
-                    self._i18n.t("menu.welcome"), choices
+                selection = self._selector.select_from_list(
+                    choices,
+                    title=self._i18n.t("menu.welcome"),
                 )
 
-                if selection == 0:
+                if selection is None or selection == 3:
+                    self._console.print(
+                        "\n[dim]Thank you for using Streamload. Goodbye.[/dim]\n"
+                    )
+                    break
+                elif selection == 0:
                     self._global_search()
                 elif selection == 1:
                     service = self._select_service()
@@ -412,11 +416,6 @@ class StreamloadApp:
                         self._service_search(service)
                 elif selection == 2:
                     self._show_settings()
-                elif selection == 3:
-                    self._console.print(
-                        "\n[dim]Thank you for using Streamload. Goodbye.[/dim]\n"
-                    )
-                    break
 
             except KeyboardInterrupt:
                 # Ctrl+C inside a menu returns to the top of the loop.
@@ -435,7 +434,6 @@ class StreamloadApp:
         """
         assert self._prompts is not None
         assert self._i18n is not None
-        assert self._tables is not None
 
         query = self._prompts.ask(self._i18n.t("search.prompt"))
         if not query.strip():
@@ -476,7 +474,6 @@ class StreamloadApp:
         self._prompts.show_info(
             self._i18n.t("search.results_found", count=len(results), query=query)
         )
-        self._tables.display(results, title=f"Results for \"{query}\"")
 
         # Let the user pick one.
         self._pick_from_results(results)
@@ -485,7 +482,6 @@ class StreamloadApp:
         """Search within a single service."""
         assert self._prompts is not None
         assert self._i18n is not None
-        assert self._tables is not None
 
         query = self._prompts.ask(self._i18n.t("search.prompt"))
         if not query.strip():
@@ -533,13 +529,13 @@ class StreamloadApp:
         self._prompts.show_info(
             self._i18n.t("search.results_found", count=len(results), query=query)
         )
-        self._tables.display(results, title=f"Results for \"{query}\" on {service.name}")
 
         self._pick_from_results(results)
 
     def _select_service(self) -> ServiceBase | None:
         """Show a numbered list of services and let the user pick one."""
         assert self._prompts is not None
+        assert self._selector is not None
 
         if not self._services:
             self._prompts.show_warning("No services loaded.")
@@ -555,28 +551,32 @@ class StreamloadApp:
             keys.append(key)
 
         names.append(self._i18n.t("menu.back") if self._i18n else "Back")
-        idx = self._prompts.choose("Select a service", names)
+        idx = self._selector.select_from_list(
+            names, title="Select a service"
+        )
 
-        if idx >= len(keys):
+        if idx is None or idx >= len(keys):
             return None
 
         return self._services[keys[idx]]
 
     def _pick_from_results(self, results: list[SearchResult]) -> None:
-        """Let the user pick a result from a displayed table, then handle it."""
-        assert self._prompts is not None
+        """Let the user pick a result using the interactive selector."""
+        assert self._selector is not None
 
         if not results:
             return
 
-        options = [
-            f"{r.entry.title} ({r.entry.year or '?'}) - {r.service_display_name}"
-            for r in results
-        ]
-        options.append(self._i18n.t("menu.back") if self._i18n else "Back")
+        from streamload.cli.ui.tables import format_search_result
 
-        idx = self._prompts.choose("Select a title", options)
-        if idx >= len(results):
+        options = [format_search_result(r) for r in results]
+
+        idx = self._selector.select_from_list(
+            options,
+            title="Select a title",
+            show_type_badge=True,
+        )
+        if idx is None or idx >= len(results):
             return
 
         self._handle_search_result(results[idx])
@@ -649,9 +649,10 @@ class StreamloadApp:
     def _handle_series(self, entry: MediaEntry, service: ServiceBase) -> None:
         """Series flow: pick season -> pick episodes -> download batch."""
         assert self._prompts is not None
-        assert self._tables is not None
         assert self._selector is not None
         assert self._i18n is not None
+
+        from streamload.cli.ui.tables import format_season
 
         # Fetch seasons.
         seasons: list[Season] = []
@@ -672,17 +673,13 @@ class StreamloadApp:
             self._prompts.show_warning("No seasons found.")
             return
 
-        self._tables.display_seasons(seasons, title=entry.title)
-
-        # Pick season.
-        season_options = [
-            s.title if s.title else f"Season {s.number}" for s in seasons
-        ]
-        season_options.append(self._i18n.t("menu.back"))
-        season_idx = self._prompts.choose(
-            self._i18n.t("series.select_season"), season_options
+        # Pick season using the interactive selector.
+        season_options = [format_season(s) for s in seasons]
+        season_idx = self._selector.select_from_list(
+            season_options,
+            title=self._i18n.t("series.select_season"),
         )
-        if season_idx >= len(seasons):
+        if season_idx is None or season_idx >= len(seasons):
             return
 
         selected_season = seasons[season_idx]
@@ -705,11 +702,6 @@ class StreamloadApp:
         if not episodes:
             self._prompts.show_warning("No episodes found.")
             return
-
-        self._tables.display_episodes(
-            episodes,
-            title=f"{entry.title} - Season {selected_season.number}",
-        )
 
         # Pick episodes.
         selected_episodes = self._selector.select_episodes(
@@ -912,6 +904,7 @@ class StreamloadApp:
     def _show_settings(self) -> None:
         """Settings menu -- view and modify configuration values."""
         assert self._prompts is not None
+        assert self._selector is not None
         assert self._i18n is not None
 
         while True:
@@ -930,11 +923,14 @@ class StreamloadApp:
                     self._i18n.t("menu.back"),
                 ]
 
-                idx = self._prompts.choose(
-                    self._i18n.t("settings.title"), settings_choices
+                idx = self._selector.select_from_list(
+                    settings_choices,
+                    title=self._i18n.t("settings.title"),
                 )
 
-                if idx == 0:
+                if idx is None or idx >= 8:
+                    break
+                elif idx == 0:
                     self._change_language()
                 elif idx == 1:
                     self._change_setting_string("preferred_audio", "Preferred audio language (e.g. ita|it, eng|en)")
@@ -950,8 +946,6 @@ class StreamloadApp:
                     self._change_setting_int("download.thread_count", "Thread count per download", 1, 32)
                 elif idx == 7:
                     self._toggle_auto_update()
-                elif idx >= 8:
-                    break
 
             except KeyboardInterrupt:
                 break
@@ -959,9 +953,14 @@ class StreamloadApp:
     def _change_language(self) -> None:
         """Let the user switch display language."""
         assert self._prompts is not None
+        assert self._selector is not None
 
         lang_choices = ["English", "Italiano", "Auto-detect"]
-        idx = self._prompts.choose("Select language", lang_choices)
+        idx = self._selector.select_from_list(
+            lang_choices, title="Select language"
+        )
+        if idx is None:
+            return
 
         lang_map = {0: "en", 1: "it", 2: "auto"}
         new_lang = lang_map[idx]
@@ -991,10 +990,15 @@ class StreamloadApp:
     def _change_output_format(self) -> None:
         """Switch between mkv and mp4 container format."""
         assert self._prompts is not None
+        assert self._selector is not None
         assert self._i18n is not None
 
         fmt_choices = ["mkv", "mp4"]
-        idx = self._prompts.choose("Output format", fmt_choices)
+        idx = self._selector.select_from_list(
+            fmt_choices, title="Output format"
+        )
+        if idx is None:
+            return
 
         config = self._config_mgr.config
         config.output.extension = fmt_choices[idx]

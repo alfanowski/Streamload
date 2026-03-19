@@ -1,191 +1,263 @@
-"""Search result and media tables for the Streamload CLI.
+"""Formatting helpers for media items in the Streamload CLI.
 
-Renders search results, seasons, and episodes as rich tables with
-color-coded type badges and score indicators.
+Provides standalone functions that return rich-markup strings for
+search results, episodes, seasons, and stream tracks.  These are
+consumed by :class:`InteractiveSelector` and other UI components
+that need formatted display labels.
+
+The old ``SearchResultTable`` class has been removed -- display is
+now handled by the interactive selector.  This module focuses solely
+on producing well-formatted rich-markup strings for individual items.
 """
 
 from __future__ import annotations
 
-from rich.console import Console
-from rich.table import Table
-from rich.text import Text
-
 from streamload.models.media import Episode, MediaType, SearchResult, Season
+from streamload.models.stream import AudioTrack, SubtitleTrack, VideoTrack
 
-# -- Colour mapping for media types ----------------------------------------
+# ---------------------------------------------------------------------------
+# Media type badge styles
+# ---------------------------------------------------------------------------
 
-_TYPE_STYLES: dict[MediaType, str] = {
-    MediaType.FILM: "bold cyan",
-    MediaType.SERIE: "bold green",
-    MediaType.ANIME: "bold magenta",
+_TYPE_BADGES: dict[MediaType, tuple[str, str]] = {
+    MediaType.FILM: ("bold white on blue", "FILM"),
+    MediaType.SERIE: ("bold white on magenta", "SERIE"),
+    MediaType.ANIME: ("bold white on red", "ANIME"),
 }
 
-_TYPE_LABELS: dict[MediaType, str] = {
-    MediaType.FILM: "Film",
-    MediaType.SERIE: "Serie",
-    MediaType.ANIME: "Anime",
+# ---------------------------------------------------------------------------
+# Language display names (common ISO 639 codes)
+# ---------------------------------------------------------------------------
+
+_LANG_NAMES: dict[str, str] = {
+    "ita": "Italian",
+    "it": "Italian",
+    "eng": "English",
+    "en": "English",
+    "spa": "Spanish",
+    "es": "Spanish",
+    "fra": "French",
+    "fr": "French",
+    "deu": "German",
+    "de": "German",
+    "por": "Portuguese",
+    "pt": "Portuguese",
+    "jpn": "Japanese",
+    "ja": "Japanese",
+    "kor": "Korean",
+    "ko": "Korean",
+    "zho": "Chinese",
+    "zh": "Chinese",
+    "ara": "Arabic",
+    "ar": "Arabic",
+    "rus": "Russian",
+    "ru": "Russian",
+    "hin": "Hindi",
+    "hi": "Hindi",
+    "und": "Unknown",
 }
 
-# -- Score bar helpers -----------------------------------------------------
 
-_SCORE_THRESHOLDS: list[tuple[float, str]] = [
-    (0.8, "bold green"),
-    (0.5, "bold yellow"),
-    (0.0, "bold red"),
-]
+def _lang_display(code: str) -> str:
+    """Return a human-readable language name for an ISO 639 code."""
+    return _LANG_NAMES.get(code.lower(), code)
 
 
-def _score_style(score: float) -> str:
-    """Return a rich style string based on score value."""
-    for threshold, style in _SCORE_THRESHOLDS:
-        if score >= threshold:
-            return style
-    return "dim"
-
-
-def _score_bar(score: float, width: int = 10) -> Text:
-    """Build a coloured bar + percentage for a 0.0-1.0 score."""
-    filled = round(score * width)
-    bar = "\u2588" * filled + "\u2591" * (width - filled)
-    pct = f" {score * 100:3.0f}%"
-    style = _score_style(score)
-    text = Text()
-    text.append(bar, style=style)
-    text.append(pct, style=style)
-    return text
+# ---------------------------------------------------------------------------
+# Duration formatting
+# ---------------------------------------------------------------------------
 
 
 def _format_duration(seconds: int | None) -> str:
-    """Format seconds as ``HH:MM:SS`` or ``MM:SS``."""
+    """Format seconds as a human-readable duration string."""
     if seconds is None:
-        return "\u2014"
-    hours, remainder = divmod(seconds, 3600)
-    minutes, secs = divmod(remainder, 60)
-    if hours:
-        return f"{hours}:{minutes:02d}:{secs:02d}"
-    return f"{minutes}:{secs:02d}"
+        return ""
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes = seconds // 60
+    if minutes < 60:
+        return f"{minutes} min"
+    hours = minutes // 60
+    remaining = minutes % 60
+    if remaining:
+        return f"{hours}h {remaining}m"
+    return f"{hours}h"
 
 
-class SearchResultTable:
-    """Renders search results in beautiful rich tables."""
+# ---------------------------------------------------------------------------
+# Bitrate formatting
+# ---------------------------------------------------------------------------
 
-    def __init__(self, console: Console) -> None:
-        self._console = console
 
-    # -- Public API --------------------------------------------------------
+def _format_bitrate(bps: int | None) -> str:
+    """Format bits-per-second as a readable bitrate string."""
+    if bps is None:
+        return ""
+    kbps = bps // 1000
+    if kbps >= 1000:
+        return f"{kbps / 1000:.1f}Mbps"
+    return f"{kbps}kbps"
 
-    def display(self, results: list[SearchResult], title: str = "") -> None:
-        """Display search results in a formatted table.
 
-        Columns: #, Title, Year, Type, Service, Language, Score.
-        The *Type* column is colour-coded per :data:`_TYPE_STYLES`.
-        """
-        if not results:
-            self._console.print("[dim]No results found.[/dim]")
-            return
+# ---------------------------------------------------------------------------
+# Public formatting functions
+# ---------------------------------------------------------------------------
 
-        table = Table(
-            title=title or "Search Results",
-            title_style="bold white",
-            border_style="dim",
-            show_lines=False,
-            padding=(0, 1),
-            expand=False,
-        )
 
-        table.add_column("#", style="dim", width=4, justify="right")
-        table.add_column("Title", style="bold white", min_width=20, max_width=50)
-        table.add_column("Year", style="dim cyan", width=6, justify="center")
-        table.add_column("Type", width=7, justify="center")
-        table.add_column("Service", style="blue", min_width=8, max_width=22)
-        table.add_column("Score", width=18, justify="left")
+def format_search_result(result: SearchResult) -> str:
+    """Format a search result as a rich-markup string.
 
-        for idx, result in enumerate(results, start=1):
-            entry = result.entry
-            media_type = entry.type
+    Example output::
 
-            type_text = Text(
-                _TYPE_LABELS.get(media_type, media_type.value),
-                style=_TYPE_STYLES.get(media_type, ""),
-            )
-            year_str = str(entry.year) if entry.year else "\u2014"
-            score_text = _score_bar(result.match_score)
+        [bold cyan][FILM][/] Cars - Motori ruggenti [dim](2006)[/] [dim]StreamingCommunity[/]
+    """
+    entry = result.entry
+    media_type = entry.type
 
-            table.add_row(
-                str(idx),
-                entry.title,
-                year_str,
-                type_text,
-                result.service_display_name,
-                score_text,
-            )
+    # Type badge
+    if media_type in _TYPE_BADGES:
+        style, label = _TYPE_BADGES[media_type]
+        badge = f"[{style}] {label} [/{style}]"
+    else:
+        badge = f"[bold]{media_type.value.upper()}[/bold]"
 
-        self._console.print()
-        self._console.print(table)
-        self._console.print()
+    # Title
+    title = f"[bold white]{entry.title}[/bold white]"
 
-    def display_seasons(self, seasons: list[Season], title: str = "") -> None:
-        """Display seasons in a compact table.
+    # Year
+    year = f" [dim]({entry.year})[/dim]" if entry.year else ""
 
-        Columns: #, Season, Episodes.
-        """
-        if not seasons:
-            self._console.print("[dim]No seasons available.[/dim]")
-            return
+    # Service
+    service = f" [dim]{result.service_display_name}[/dim]"
 
-        table = Table(
-            title=title or "Seasons",
-            title_style="bold white",
-            border_style="dim",
-            show_lines=False,
-            padding=(0, 1),
-            expand=False,
-        )
+    return f"{badge} {title}{year}{service}"
 
-        table.add_column("#", style="dim", width=4, justify="right")
-        table.add_column("Season", style="bold white", min_width=12)
-        table.add_column("Episodes", style="cyan", width=10, justify="center")
 
-        for idx, season in enumerate(seasons, start=1):
-            display_name = season.title if season.title else f"Season {season.number}"
-            episode_str = str(season.episode_count) if season.episode_count else "\u2014"
-            table.add_row(str(idx), display_name, episode_str)
+def format_episode(episode: Episode) -> str:
+    """Format an episode as a rich-markup string.
 
-        self._console.print()
-        self._console.print(table)
-        self._console.print()
+    Example output::
 
-    def display_episodes(self, episodes: list[Episode], title: str = "") -> None:
-        """Display episodes in a table.
+        E01 - Pilot [dim](45 min)[/]
+    """
+    ep_num = f"[bold cyan]E{episode.number:02d}[/bold cyan]"
+    title = episode.title or ""
+    duration = ""
+    if episode.duration:
+        duration = f" [dim]({_format_duration(episode.duration)})[/dim]"
 
-        Columns: #, Episode, Title, Duration.
-        """
-        if not episodes:
-            self._console.print("[dim]No episodes available.[/dim]")
-            return
+    if title:
+        return f"{ep_num} - {title}{duration}"
+    return f"{ep_num}{duration}"
 
-        table = Table(
-            title=title or "Episodes",
-            title_style="bold white",
-            border_style="dim",
-            show_lines=False,
-            padding=(0, 1),
-            expand=False,
-        )
 
-        table.add_column("#", style="dim", width=4, justify="right")
-        table.add_column("Episode", style="bold cyan", width=8, justify="center")
-        table.add_column("Title", style="white", min_width=20, max_width=50)
-        table.add_column("Duration", style="dim", width=10, justify="right")
+def format_season(season: Season) -> str:
+    """Format a season as a rich-markup string.
 
-        for idx, ep in enumerate(episodes, start=1):
-            table.add_row(
-                str(idx),
-                str(ep.number),
-                ep.title,
-                _format_duration(ep.duration),
-            )
+    Example output::
 
-        self._console.print()
-        self._console.print(table)
-        self._console.print()
+        Season 1 [dim](10 episodes)[/]
+    """
+    name = season.title if season.title else f"Season {season.number}"
+    label = f"[bold white]{name}[/bold white]"
+
+    if season.episode_count:
+        ep_word = "episode" if season.episode_count == 1 else "episodes"
+        count = f" [dim]({season.episode_count} {ep_word})[/dim]"
+    else:
+        count = ""
+
+    return f"{label}{count}"
+
+
+def format_video_track(track: VideoTrack) -> str:
+    """Format a video track as a rich-markup string.
+
+    Example output::
+
+        1080p [dim]h264 4500kbps[/] [bold yellow]HDR[/]
+    """
+    height = track.height
+    resolution = f"{height}p" if height else track.resolution
+    label = f"[bold white]{resolution}[/bold white]"
+
+    details_parts: list[str] = [track.codec]
+    if track.bitrate:
+        details_parts.append(_format_bitrate(track.bitrate))
+    if track.fps:
+        details_parts.append(f"{track.fps:.0f}fps")
+
+    details = " ".join(details_parts)
+    result = f"{label} [dim]{details}[/dim]"
+
+    if track.hdr:
+        result += " [bold yellow]HDR[/bold yellow]"
+
+    return result
+
+
+def format_audio_track(track: AudioTrack) -> str:
+    """Format an audio track as a rich-markup string.
+
+    Example output::
+
+        Italian [dim]aac 2.0[/]
+    """
+    lang = _lang_display(track.language)
+    label = f"[bold white]{lang}[/bold white]"
+
+    details_parts: list[str] = [track.codec]
+    if track.channels:
+        details_parts.append(track.channels)
+    if track.bitrate:
+        details_parts.append(_format_bitrate(track.bitrate))
+
+    details = " ".join(details_parts)
+    result = f"{label} [dim]{details}[/dim]"
+
+    if track.name:
+        result += f" [dim]({track.name})[/dim]"
+
+    return result
+
+
+def format_subtitle_track(track: SubtitleTrack) -> str:
+    """Format a subtitle track as a rich-markup string.
+
+    Example output::
+
+        English [dim]vtt[/] [yellow][forced][/]
+    """
+    lang = _lang_display(track.language)
+    label = f"[bold white]{lang}[/bold white]"
+    fmt = f" [dim]{track.format}[/dim]"
+
+    result = f"{label}{fmt}"
+
+    if track.forced:
+        result += " [yellow][forced][/yellow]"
+
+    if track.name:
+        result += f" [dim]({track.name})[/dim]"
+
+    return result
+
+
+def format_service(service: object) -> str:
+    """Format a service name with language tag.
+
+    Expects an object with ``name`` and ``language`` attributes (i.e.
+    a :class:`ServiceBase` subclass).
+
+    Example output::
+
+        StreamingCommunity [dim](it)[/]
+    """
+    name = getattr(service, "name", str(service))
+    language = getattr(service, "language", "")
+
+    result = f"[bold white]{name}[/bold white]"
+    if language:
+        result += f" [dim]({language})[/dim]"
+
+    return result

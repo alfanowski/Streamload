@@ -66,6 +66,33 @@ STRINGS: dict[str, str] = {
     "error.auth_failed":     "Authentication failed for {service}",
     "error.no_streams":      "No streams available for {name}",
 
+    # ── Navigation ──────────────────────────────────────────────────────
+    "nav.filter_placeholder":  "Type to filter...",
+    "nav.no_matches":          "No matches",
+    "nav.items_above":         "{count} above",
+    "nav.items_below":         "{count} below",
+    "nav.selected_count":      "{count} selected",
+    "nav.confirm_selection":   "Enter to confirm | Esc to cancel",
+    "nav.type_to_filter":      "Type to filter | Arrows to navigate",
+    "nav.select_title":        "Select a title",
+    "nav.select_service":      "Select a service",
+
+    # ── Track selection (new) ────────────────────────────────────────────
+    "tracks.no_video":         "No video tracks available",
+    "tracks.no_audio":         "No audio tracks found. Download will continue without audio.",
+    "tracks.no_subtitle":      "No subtitles available",
+    "tracks.selection_summary": "{video} | {audio_count} audio | {sub_count} subtitles",
+    "tracks.tab_hint":         "Tab: switch section | Space: select | Enter: confirm",
+
+    # ── Download (new) ──────────────────────────────────────────────────
+    "download.cancel_all":     "Cancel all",
+    "download.cancel_selected": "Cancel selected",
+    "download.pause":          "Pause/Resume",
+    "download.cancelled":      "Download cancelled",
+    "download.paused":         "Paused",
+    "download.completed_count": "{done}/{total} completed | {remaining} remaining",
+    "download.total_speed":    "Total speed: {speed}",
+
     # ── System ────────────────────────────────────────────────────────────
     "system.checking_deps":    "Checking dependencies...",
     "system.ffmpeg_found":     "FFmpeg found: {version}",

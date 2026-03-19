@@ -66,6 +66,33 @@ STRINGS: dict[str, str] = {
     "error.auth_failed":     "Autenticazione fallita per {service}",
     "error.no_streams":      "Nessuno stream disponibile per {name}",
 
+    # ── Navigation ──────────────────────────────────────────────────────
+    "nav.filter_placeholder":  "Digita per filtrare...",
+    "nav.no_matches":          "Nessuna corrispondenza",
+    "nav.items_above":         "{count} sopra",
+    "nav.items_below":         "{count} sotto",
+    "nav.selected_count":      "{count} selezionati",
+    "nav.confirm_selection":   "Invio per confermare | Esc per annullare",
+    "nav.type_to_filter":      "Digita per filtrare | Frecce per navigare",
+    "nav.select_title":        "Seleziona un titolo",
+    "nav.select_service":      "Seleziona un servizio",
+
+    # ── Track selection (new) ────────────────────────────────────────────
+    "tracks.no_video":         "Nessuna traccia video disponibile",
+    "tracks.no_audio":         "Nessuna traccia audio trovata. Il download continuera senza audio.",
+    "tracks.no_subtitle":      "Nessun sottotitolo disponibile",
+    "tracks.selection_summary": "{video} | {audio_count} audio | {sub_count} sottotitoli",
+    "tracks.tab_hint":         "Tab: cambia sezione | Spazio: seleziona | Invio: conferma",
+
+    # ── Download (new) ──────────────────────────────────────────────────
+    "download.cancel_all":     "Annulla tutti",
+    "download.cancel_selected": "Annulla selezionato",
+    "download.pause":          "Pausa/Riprendi",
+    "download.cancelled":      "Download annullato",
+    "download.paused":         "In pausa",
+    "download.completed_count": "{done}/{total} completati | {remaining} rimanenti",
+    "download.total_speed":    "Velocita totale: {speed}",
+
     # ── System ────────────────────────────────────────────────────────────
     "system.checking_deps":    "Verifica dipendenze...",
     "system.ffmpeg_found":     "FFmpeg trovato: {version}",
