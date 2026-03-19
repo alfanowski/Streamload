@@ -95,19 +95,56 @@ BG_CYAN = f"{ESC}[46m"
 # Eye-catching ASCII banner
 # ---------------------------------------------------------------------------
 
-BANNER = f"""\
-{BOLD}{FG_CYAN}  ╔═══╗╔════╗╔═══╗╔═══╗╔═══╗╔╗╔╗╔╗  ╔═══╗╔═══╗╔═══╗
-  ║╔═╗║║╔╗╔╗║║╔═╗║║╔══╝║╔═╗║║║║║║║  ║╔═╗║║╔═╗║╚╗╔╗║
-  ║╚══╗╚╝║║╚╝║╚═╗║║╚══╗║║ ║║║╚╝║║║  ║║ ║║║║ ║║ ║║║║
-  ╚══╗║  ║║  ║╔═╗║║╔══╝║╚═╝║║╔╗║║║  ║║ ║║║╚═╝║ ║║║║
-  ║╚═╝║  ║║  ║╚═╝║║╚══╗║╔═╗║║║║╚╣╚═╗║╚═╝║║╔═╗║╔╝╚╝║
-  ╚═══╝  ╚╝  ╚═══╝╚═══╝╚╝ ╚╝╚╝╚═╩══╝╚═══╝╚╝ ╚╝╚═══╝{RESET}"""
+BANNER_LINES = [
+    "███████╗████████╗██████╗ ███████╗ █████╗ ███╗   ███╗██╗      ██████╗  █████╗ ██████╗ ",
+    "██╔════╝╚══██╔══╝██╔══██╗██╔════╝██╔══██╗████╗ ████║██║     ██╔═══██╗██╔══██╗██╔══██╗",
+    "███████╗   ██║   ██████╔╝█████╗  ███████║██╔████╔██║██║     ██║   ██║███████║██║  ██║",
+    "╚════██║   ██║   ██╔══██╗██╔══╝  ██╔══██║██║╚██╔╝██║██║     ██║   ██║██╔══██║██║  ██║",
+    "███████║   ██║   ██║  ██║███████╗██║  ██║██║ ╚═╝ ██║███████╗╚██████╔╝██║  ██║██████╔╝",
+    "╚══════╝   ╚═╝   ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚═════╝ ",
+]
 
-# Compact fallback (3-line)
-BANNER_COMPACT = f"""\
-{BOLD}{FG_CYAN} ╔═╗╔╦╗╦═╗╔═╗╔═╗╔╦╗╦  ╔═╗╔═╗╔╦╗
- ╚═╗ ║ ╠╦╝║╣ ╠═╣║║║║  ║ ║╠═╣ ║║
- ╚═╝ ╩ ╩╚═╚═╝╩ ╩╩ ╩╩═╝╚═╝╩ ╩═╩╝{RESET}"""
+BANNER_COMPACT_LINES = [
+    "╔═╗╔╦╗╦═╗╔═╗╔═╗╔╦╗╦  ╔═╗╔═╗╔╦╗",
+    "╚═╗ ║ ╠╦╝║╣ ╠═╣║║║║  ║ ║╠═╣ ║║",
+    "╚═╝ ╩ ╩╚═╚═╝╩ ╩╩ ╩╩═╝╚═╝╩ ╩═╩╝",
+]
+
+
+def _build_banner(width: int, version: str = "") -> str:
+    """Build a centered, boxed banner that adapts to terminal width."""
+    # Pick banner variant based on width
+    lines = BANNER_LINES if width >= 90 else BANNER_COMPACT_LINES
+    max_line_len = max(len(l) for l in lines)
+
+    # If terminal is too narrow even for compact, skip banner
+    if width < 38:
+        return f"{BOLD}{FG_CYAN}  STREAMLOAD{RESET}"
+
+    # Box width
+    box_w = min(width - 2, max_line_len + 6)
+
+    out = []
+    # Top border
+    out.append(f"{FG_CYAN}{'─' * box_w}{RESET}")
+
+    # Banner lines centered
+    for line in lines:
+        padding = (box_w - len(line)) // 2
+        out.append(f"{BOLD}{FG_CYAN}{' ' * max(padding, 1)}{line}{RESET}")
+
+    # Version line centered
+    if version:
+        ver_text = f"v{version}  │  Professional Media Downloader"
+    else:
+        ver_text = "Professional Media Downloader"
+    ver_pad = (box_w - len(ver_text)) // 2
+    out.append(f"{DIM}{' ' * max(ver_pad, 1)}{ver_text}{RESET}")
+
+    # Bottom border
+    out.append(f"{FG_CYAN}{'─' * box_w}{RESET}")
+
+    return "\n".join(out)
 
 # Unicode glyphs
 UP_ARROW = "\u25b2"
@@ -544,6 +581,7 @@ class InteractiveSelector:
         # for rendering during interactive loops.
         self._console = console
         self._header_text: str | None = None
+        self._version: str = ""
 
     def set_header(self, header: str) -> None:
         """Set a persistent header shown above every screen.
@@ -573,16 +611,17 @@ class InteractiveSelector:
         import tty
 
         fd = sys.stdin.fileno()
+        old = None
         try:
             old = termios.tcgetattr(fd)
-        except termios.error:
-            # Not a real terminal -- fallback
-            return fd, None
-
-        try:
             tty.setcbreak(fd)
-        except termios.error:
-            return fd, None
+        except (termios.error, OSError, AttributeError) as exc:
+            # If we can't set cbreak, try setraw as last resort
+            if old is not None:
+                try:
+                    tty.setraw(fd)
+                except Exception:
+                    pass
 
         sys.stdout.write(HIDE_CURSOR)
         sys.stdout.flush()
@@ -629,11 +668,12 @@ class InteractiveSelector:
 
     def _get_banner_lines(self) -> list[str]:
         """Return the banner as a list of strings to display."""
-        _, h = _term_size()
-        # Use compact banner if terminal is small
-        if h < 30:
-            return BANNER_COMPACT.split("\n")
-        return BANNER.split("\n")
+        w, _ = _term_size()
+        return _build_banner(w, self._version).split("\n")
+
+    def set_version(self, version: str) -> None:
+        """Set version string for the banner."""
+        self._version = version
 
     def _get_version_line(self) -> str:
         """Extract version from stored header if available."""

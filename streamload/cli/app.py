@@ -299,11 +299,8 @@ class StreamloadApp:
             + f"  ({svc_count} service{'s' if svc_count != 1 else ''} loaded)"
         )
 
-        # Set banner as persistent header for selector screens
-        from streamload.cli.ui.prompts import _BANNER_LINES
-        banner_str = "[bold cyan]" + "\n".join(_BANNER_LINES) + "[/bold cyan]"
-        banner_str += f"\n  [bold white]v{__version__}[/bold white]  [dim]|  Professional media downloader[/dim]\n"
-        self._selector.set_header(banner_str)
+        # Set version for selector banner
+        self._selector.set_version(__version__)
 
     def _check_system_deps(self) -> None:
         """Verify FFmpeg / FFprobe are installed."""
