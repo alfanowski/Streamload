@@ -390,7 +390,7 @@ class HLSDownloader(BaseDownloader):
             return self._key_cache[key_url]
 
         log.debug("Fetching AES-128 key: %s", key_url)
-        resp = self._http.get(key_url)
+        resp = self._http.get(key_url, headers=self._extra_headers or None)
         resp.raise_for_status()
         key = resp.content
 
