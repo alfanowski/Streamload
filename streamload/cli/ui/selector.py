@@ -455,8 +455,9 @@ class InteractiveSelector:
     * **Tab / Shift-Tab** -- cycle sections
     """
 
-    def __init__(self, console: object = None) -> None:
+    def __init__(self, console: object = None, i18n: object = None) -> None:
         self._console = console
+        self._i18n = i18n
         self._header_text: str | None = None
         self._version: str = ""
         # curses screen object (set during interactive sessions on Unix)
@@ -464,6 +465,12 @@ class InteractiveSelector:
         self._has_colors: bool = False
         # Loading state
         self._loading: bool = False
+
+    def _t(self, key: str, **kwargs) -> str:
+        """Translate a string key via i18n, with fallback to the key itself."""
+        if self._i18n and hasattr(self._i18n, 't'):
+            return self._i18n.t(key, **kwargs)
+        return key
         self._loading_thread: threading.Thread | None = None
 
     def set_header(self, header: str) -> None:
@@ -495,11 +502,13 @@ class InteractiveSelector:
                 key = self._read_key()
 
                 if key == KEY_ENTER:
-                    return text
+                    return text if text.strip() else None
                 elif key == KEY_ESC:
                     return None
                 elif key == KEY_BACKSPACE:
                     text = text[:-1]
+                elif key == KEY_SPACE:
+                    text += " "
                 elif len(key) == 1 and key.isprintable():
                     text += key
         except (KeyboardInterrupt, EOFError):
@@ -1920,13 +1929,13 @@ class InteractiveSelector:
         y += 1
 
         # -- Box top --
-        y = self._draw_box_top(y, box_x, box_width, "Track Selection")
+        y = self._draw_box_top(y, box_x, box_width, self._t("tracks.confirm"))
         y = self._draw_box_empty(y, box_x, box_width)
 
         section_defs: list[tuple[str, _ListState, bool, str | None]] = [
-            ("VIDEO", sections.video, False, self._video_warning(bundle)),
-            ("AUDIO", sections.audio, True, self._audio_warning(bundle)),
-            ("SUBTITLES", sections.subtitles, True, self._subtitle_warning(bundle)),
+            (self._t("tracks.video_header"), sections.video, False, self._video_warning(bundle)),
+            (self._t("tracks.audio_header"), sections.audio, True, self._audio_warning(bundle)),
+            (self._t("tracks.subtitle_header"), sections.subtitles, True, self._subtitle_warning(bundle)),
         ]
 
         for idx, (label, st, multi, warning) in enumerate(section_defs):
@@ -2269,9 +2278,9 @@ class InteractiveSelector:
         out.append(f"  {_FG_CYAN}{H_LINE * min(w - 4, 80)}{_RESET}")
 
         section_defs: list[tuple[str, _ListState, bool, str | None]] = [
-            ("VIDEO", sections.video, False, self._video_warning(bundle)),
-            ("AUDIO", sections.audio, True, self._audio_warning(bundle)),
-            ("SUBTITLES", sections.subtitles, True, self._subtitle_warning(bundle)),
+            (self._t("tracks.video_header"), sections.video, False, self._video_warning(bundle)),
+            (self._t("tracks.audio_header"), sections.audio, True, self._audio_warning(bundle)),
+            (self._t("tracks.subtitle_header"), sections.subtitles, True, self._subtitle_warning(bundle)),
         ]
 
         for idx, (label, st, multi, warning) in enumerate(section_defs):

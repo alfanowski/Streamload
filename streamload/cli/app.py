@@ -245,7 +245,7 @@ class StreamloadApp:
 
         # 3. UI
         self._prompts = UIPrompts(self._console, self._i18n)
-        self._selector = InteractiveSelector(self._console)
+        self._selector = InteractiveSelector(self._console, self._i18n)
         self._progress_ui = DownloadProgressUI(self._console, self._i18n)
 
         # 4. System dependencies
@@ -847,9 +847,8 @@ class StreamloadApp:
     # ==================================================================
 
     def _download_single(self, job: DownloadJob) -> None:
-        """Execute a single download with live progress."""
+        """Execute a single download."""
         assert self._download_mgr is not None
-        assert self._progress_ui is not None
         assert self._prompts is not None
         assert self._i18n is not None
 
@@ -861,44 +860,32 @@ class StreamloadApp:
             else "Unknown"
         )
 
-        self._prompts.show_info(self._i18n.t("download.starting", name=name))
+        self._console.print(f"\n[bold cyan]{self._i18n.t('download.starting', name=name)}[/bold cyan]\n")
 
-        self._progress_ui.set_queue_info(total=1, remaining=1)
-        with self._progress_ui:
-            try:
-                self._download_mgr.download_single(job)
-            except StreamloadError as exc:
-                # Error is already reported via callbacks; log it.
-                log.error("Download failed: %s", exc)
-            except Exception as exc:
-                self._prompts.show_error(
-                    self._i18n.t("download.failed", name=name, reason=str(exc))
-                )
-                log.error("Download failed unexpectedly", exc_info=True)
+        try:
+            self._download_mgr.download_single(job)
+        except StreamloadError as exc:
+            log.error("Download failed: %s", exc)
+        except Exception as exc:
+            self._console.print(f"[bold red]{self._i18n.t('download.failed', name=name, reason=str(exc))}[/bold red]")
+            log.error("Download failed unexpectedly", exc_info=True)
 
         self._show_job_summary([job])
 
     def _download_batch(self, jobs: list[DownloadJob]) -> None:
-        """Execute multiple download jobs with concurrent progress tracking."""
+        """Execute multiple download jobs."""
         assert self._download_mgr is not None
-        assert self._progress_ui is not None
         assert self._prompts is not None
         assert self._i18n is not None
 
         total = len(jobs)
-        self._prompts.show_info(
-            self._i18n.t("download.queue_remaining", count=total)
-        )
+        self._console.print(f"\n[bold cyan]{self._i18n.t('download.queue_remaining', count=total)}[/bold cyan]\n")
 
-        self._progress_ui.set_queue_info(total=total, remaining=total)
-        with self._progress_ui:
-            try:
-                self._download_mgr.download_batch(jobs)
-            except Exception as exc:
-                self._prompts.show_error(
-                    self._i18n.t("error.generic", message=str(exc))
-                )
-                log.error("Batch download error", exc_info=True)
+        try:
+            self._download_mgr.download_batch(jobs)
+        except Exception as exc:
+            self._console.print(f"[bold red]{self._i18n.t('error.generic', message=str(exc))}[/bold red]")
+            log.error("Batch download error", exc_info=True)
 
         self._show_job_summary(jobs)
 

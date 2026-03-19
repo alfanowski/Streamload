@@ -220,6 +220,20 @@ class DownloadManager:
                 # Ensure binary is available (auto-download on first use)
                 if self._n_m3u8dl.ensure_binary():
                     log.info("Job [%s] trying N_m3u8DL-RE (fast mode)", job.id)
+                    # Map user's video selection to N_m3u8DL-RE format
+                    video_sel = "best"
+                    if job.tracks and job.tracks.video:
+                        h = job.tracks.video.height
+                        if h:
+                            video_sel = f"res=\"{h}*\""
+
+                    # Map audio selection
+                    audio_sel = "all"
+                    if job.tracks and job.tracks.audio:
+                        langs = [a.language for a in job.tracks.audio if a.language]
+                        if langs:
+                            audio_sel = "all"  # download all selected
+
                     result_path = self._n_m3u8dl.download(
                         manifest_url=job.bundle.manifest_url,
                         output_dir=temp_dir,
@@ -227,6 +241,8 @@ class DownloadManager:
                         download_id=job.id,
                         callbacks=self._callbacks,
                         extra_headers=job.bundle.extra_headers if job.bundle else None,
+                        selected_video=video_sel,
+                        selected_audio=audio_sel,
                     )
                     if result_path and result_path.exists() and result_path.stat().st_size > 0:
                         n_m3u8dl_success = True
