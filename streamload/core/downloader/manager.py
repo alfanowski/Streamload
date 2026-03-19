@@ -30,6 +30,7 @@ from streamload.core.downloader.base import BaseDownloader
 from streamload.core.downloader.dash import DASHDownloader
 from streamload.core.downloader.hls import HLSDownloader
 from streamload.core.downloader.mp4 import MP4Downloader
+from streamload.core.downloader.n_m3u8dl import N_m3u8dlDownloader
 from streamload.core.events import (
     DownloadComplete,
     DownloadProgress,
@@ -131,6 +132,11 @@ class DownloadManager:
         self._dash = DASHDownloader(http_client, config.download)
         self._mp4 = MP4Downloader(http_client, config.download)
 
+        # N_m3u8DL-RE (compiled binary) for fast HLS/DASH downloads.
+        self._n_m3u8dl = N_m3u8dlDownloader(http_client, config.download)
+        if not self._n_m3u8dl.available:
+            log.info("N_m3u8DL-RE not found, will attempt download on first use")
+
     # ------------------------------------------------------------------
     # Single-item download
     # ------------------------------------------------------------------
@@ -208,71 +214,105 @@ class DownloadManager:
                         f"DRM key acquisition failed: {exc.message}"
                     ) from exc
 
-            # -- Detect downloader and execute download ----------------------
-            downloader = self._detect_downloader(job.bundle)
+            # -- Try N_m3u8DL-RE first (much faster) --------------------------
+            n_m3u8dl_success = False
+            if job.bundle.manifest_url and not job.bundle.drm_type:
+                # Ensure binary is available (auto-download on first use)
+                if self._n_m3u8dl.ensure_binary():
+                    log.info("Job [%s] trying N_m3u8DL-RE (fast mode)", job.id)
+                    result_path = self._n_m3u8dl.download(
+                        manifest_url=job.bundle.manifest_url,
+                        output_dir=temp_dir,
+                        filename=job.output_path.stem if job.output_path else job.id,
+                        download_id=job.id,
+                        callbacks=self._callbacks,
+                        extra_headers=job.bundle.extra_headers if job.bundle else None,
+                    )
+                    if result_path and result_path.exists() and result_path.stat().st_size > 0:
+                        n_m3u8dl_success = True
+                        log.info("Job [%s] N_m3u8DL-RE download complete: %s", job.id, result_path)
+                        # N_m3u8DL-RE already merges tracks, move to output
+                        final_ext = self._config.output.extension
+                        final_path = job.output_path.with_suffix(f".{final_ext}")
+                        final_path.parent.mkdir(parents=True, exist_ok=True)
+                        shutil.move(str(result_path), str(final_path))
+                        job.output_path = final_path
+                    else:
+                        log.warning("Job [%s] N_m3u8DL-RE failed, falling back to Python", job.id)
 
-            # Pre-load DASH manifest if using DASHDownloader.
-            if (
-                isinstance(downloader, DASHDownloader)
-                and job.bundle.manifest_url
-            ):
-                resp = self._http.get(job.bundle.manifest_url)
-                resp.raise_for_status()
-                downloader.set_mpd(job.bundle.manifest_url, resp.text)
+            if not n_m3u8dl_success:
+                # -- Fallback: Python downloader ---------------------------------
+                downloader = self._detect_downloader(job.bundle)
 
-            log.info(
-                "Job [%s] downloading with %s",
-                job.id, type(downloader).__name__,
-            )
-            downloaded_files = downloader.download(
-                download_id=job.id,
-                tracks=job.tracks,
-                output_dir=temp_dir,
-                callbacks=self._callbacks,
-                extra_headers=job.bundle.extra_headers if job.bundle else None,
-            )
+                # Pre-load DASH manifest if using DASHDownloader.
+                if (
+                    isinstance(downloader, DASHDownloader)
+                    and job.bundle.manifest_url
+                ):
+                    resp = self._http.get(job.bundle.manifest_url)
+                    resp.raise_for_status()
+                    downloader.set_mpd(job.bundle.manifest_url, resp.text)
 
-            if not downloaded_files:
-                raise StreamloadError(
-                    f"No files were downloaded for job {job.id}"
+                log.info(
+                    "Job [%s] downloading with %s",
+                    job.id, type(downloader).__name__,
+                )
+                downloaded_files = downloader.download(
+                    download_id=job.id,
+                    tracks=job.tracks,
+                    output_dir=temp_dir,
+                    callbacks=self._callbacks,
+                    extra_headers=job.bundle.extra_headers if job.bundle else None,
                 )
 
-            # -- Classify downloaded files ----------------------------------
-            video_path, audio_paths, subtitle_paths = self._classify_files(
-                downloaded_files, job.id,
-            )
+                if not downloaded_files:
+                    raise StreamloadError(
+                        f"No files were downloaded for job {job.id}"
+                    )
 
-            if video_path is None:
-                raise StreamloadError(
-                    f"No video file found among downloaded files for job {job.id}"
+            if not n_m3u8dl_success:
+                # -- Classify downloaded files ----------------------------------
+                video_path, audio_paths, subtitle_paths = self._classify_files(
+                    downloaded_files, job.id,
                 )
 
-            # -- Merge ------------------------------------------------------
-            job.status = "merging"
-            self._callbacks.on_merge_progress(MergeProgress(
-                download_id=job.id,
-                filename=job.output_path.name,
-                stage="merging",
-            ))
+                if video_path is None:
+                    raise StreamloadError(
+                        f"No video file found among downloaded files for job {job.id}"
+                    )
 
-            extension = self._config.output.extension
-            final_path = self._merger.merge(
-                video_path=video_path,
-                audio_paths=audio_paths,
-                subtitle_paths=subtitle_paths,
-                output_path=job.output_path,
-                extension=extension,
-                audio_tracks=job.tracks.audio if job.tracks else [],
-                subtitle_tracks=job.tracks.subtitles if job.tracks else [],
-            )
+                # -- Merge ------------------------------------------------------
+                job.status = "merging"
+                self._callbacks.on_merge_progress(MergeProgress(
+                    download_id=job.id,
+                    filename=job.output_path.name,
+                    stage="merging",
+                ))
 
-            # -- Cleanup temp directory -------------------------------------
-            if self._config.download.cleanup_tmp:
-                self._cleanup_temp_dir(temp_dir)
+                extension = self._config.output.extension
+                final_path = self._merger.merge(
+                    video_path=video_path,
+                    audio_paths=audio_paths,
+                    subtitle_paths=subtitle_paths,
+                    output_path=job.output_path,
+                    extension=extension,
+                    audio_tracks=job.tracks.audio if job.tracks else [],
+                    subtitle_tracks=job.tracks.subtitles if job.tracks else [],
+                )
+
+                # -- Cleanup temp directory -------------------------------------
+                if self._config.download.cleanup_tmp:
+                    self._cleanup_temp_dir(temp_dir)
+
+                job.output_path = final_path
+            else:
+                final_path = job.output_path
+                # Cleanup temp dir from N_m3u8DL-RE
+                if self._config.download.cleanup_tmp:
+                    self._cleanup_temp_dir(temp_dir)
 
             # -- Mark complete ----------------------------------------------
             job.status = "complete"
-            job.output_path = final_path
 
             elapsed = time.monotonic() - start_time
             file_size = final_path.stat().st_size if final_path.exists() else 0
