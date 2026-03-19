@@ -48,11 +48,19 @@ STRINGS: dict[str, str] = {
     "tracks.none_available":  "No tracks available",
 
     # ── Settings ──────────────────────────────────────────────────────────
-    "settings.title":       "Settings",
-    "settings.language":    "Language",
-    "settings.output_path": "Output path",
-    "settings.saved":       "Settings saved",
-    "settings.reset":       "Settings reset to defaults",
+    "settings.title":              "Settings",
+    "settings.language":           "Language",
+    "settings.preferred_audio":    "Preferred audio",
+    "settings.preferred_subtitle": "Preferred subtitle",
+    "settings.output_path":        "Output path",
+    "settings.output_format":      "Output format",
+    "settings.max_concurrent":     "Concurrent downloads",
+    "settings.thread_count":       "Threads per download",
+    "settings.auto_update":        "Auto-update",
+    "settings.on":                 "on",
+    "settings.off":                "off",
+    "settings.saved":              "Settings saved",
+    "settings.reset":              "Settings reset to defaults",
 
     # ── Errors ────────────────────────────────────────────────────────────
     "error.generic":         "An error occurred: {message}",

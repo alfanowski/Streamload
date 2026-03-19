@@ -21,6 +21,8 @@ import platform
 import re
 import shutil
 import sys
+import threading
+import time
 from dataclasses import dataclass, field
 from typing import Sequence
 
@@ -121,13 +123,24 @@ def _strip_rich_markup(text: str) -> str:
 # Banner
 # ---------------------------------------------------------------------------
 
-BANNER_LINES = [
+BANNER_LINES_COMPACT = [
     " ╔═╗╔╦╗╦═╗╔═╗╔═╗╔╦╗╦  ╔═╗╔═╗╔╦╗",
     " ╚═╗ ║ ╠╦╝║╣ ╠═╣║║║║  ║ ║╠═╣ ║║",
     " ╚═╝ ╩ ╩╚═╚═╝╩ ╩╩ ╩╩═╝╚═╝╩ ╩═╩╝",
 ]
 
-BANNER_WIDTH = max(len(line) for line in BANNER_LINES)  # 34
+BANNER_LINES_LARGE = [
+    " ███████╗████████╗██████╗ ███████╗ █████╗ ███╗   ███╗██╗      ██████╗  █████╗ ██████╗ ",
+    " ██╔════╝╚══██╔══╝██╔══██╗██╔════╝██╔══██╗████╗ ████║██║     ██╔═══██╗██╔══██╗██╔══██╗",
+    " ███████╗   ██║   ██████╔╝█████╗  ███████║██╔████╔██║██║     ██║   ██║███████║██║  ██║",
+    " ╚════██║   ██║   ██╔══██╗██╔══╝  ██╔══██║██║╚██╔╝██║██║     ██║   ██║██╔══██║██║  ██║",
+    " ███████║   ██║   ██║  ██║███████╗██║  ██║██║ ╚═╝ ██║███████╗╚██████╔╝██║  ██║██████╔╝",
+    " ╚══════╝   ╚═╝   ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚═════╝ ",
+]
+
+BANNER_LINES = BANNER_LINES_COMPACT  # default for compatibility
+BANNER_WIDTH = max(len(line) for line in BANNER_LINES_COMPACT)  # 34
+BANNER_LARGE_WIDTH = max(len(line) for line in BANNER_LINES_LARGE)  # ~89
 
 # Unicode glyphs
 UP_ARROW = "\u25b2"
@@ -449,6 +462,9 @@ class InteractiveSelector:
         # curses screen object (set during interactive sessions on Unix)
         self._stdscr: object | None = None
         self._has_colors: bool = False
+        # Loading state
+        self._loading: bool = False
+        self._loading_thread: threading.Thread | None = None
 
     def set_header(self, header: str) -> None:
         """Set a persistent header (no-op -- banner is built-in)."""
@@ -457,6 +473,621 @@ class InteractiveSelector:
     def set_version(self, version: str) -> None:
         """Set version string for the banner."""
         self._version = version
+
+    # =====================================================================
+    # Text input within curses
+    # =====================================================================
+
+    def text_input(self, prompt: str, title: str = "") -> str | None:
+        """Text input field WITHIN curses.
+
+        Shows banner + box + prompt + cursor. Returns the entered text,
+        or ``None`` if Esc is pressed (back).
+        """
+        if _IS_WINDOWS:
+            return self._text_input_ansi(prompt, title)
+
+        text = ""
+        self._enter_interactive()
+        try:
+            while True:
+                self._render_text_input(text, prompt, title)
+                key = self._read_key()
+
+                if key == KEY_ENTER:
+                    return text
+                elif key == KEY_ESC:
+                    return None
+                elif key == KEY_BACKSPACE:
+                    text = text[:-1]
+                elif len(key) == 1 and key.isprintable():
+                    text += key
+        except (KeyboardInterrupt, EOFError):
+            return None
+        finally:
+            self._exit_interactive()
+
+    def _render_text_input(self, text: str, prompt: str, title: str) -> None:
+        """Render the text input screen inside curses."""
+        import curses
+
+        stdscr = self._stdscr
+        if stdscr is None:
+            return
+
+        stdscr.erase()
+        w, h = self._get_screen_size()
+        box_width = min(w - 2, 80)
+        box_x = max((w - box_width) // 2, 0)
+
+        y = 0
+
+        # -- Banner --
+        y = self._draw_banner(y, w)
+        y += 1
+
+        # -- Box top --
+        y = self._draw_box_top(y, box_x, box_width, title or "Input")
+        y = self._draw_box_empty(y, box_x, box_width)
+
+        # -- Prompt text --
+        y = self._draw_box_line_raw(
+            y, box_x, box_width,
+            [("  ", self._attr_normal()), (prompt, self._attr_white_bold())],
+        )
+        y = self._draw_box_empty(y, box_x, box_width)
+
+        # -- Input field --
+        # Draw a highlighted input area
+        inner_avail = box_width - 8  # some padding
+        display_text = text
+        if len(display_text) > inner_avail:
+            display_text = display_text[-(inner_avail - 1):]
+
+        field_segments: list[tuple[str, int]] = [
+            ("  > ", self._attr_cyan_bold()),
+            (display_text, self._attr_white_bold()),
+            ("_", self._attr_cyan_bold()),
+        ]
+        y = self._draw_box_line_raw(y, box_x, box_width, field_segments)
+        y = self._draw_box_empty(y, box_x, box_width)
+        y = self._draw_box_empty(y, box_x, box_width)
+
+        # -- Footer --
+        footer_segments: list[tuple[str, int]] = [
+            ("  ", self._attr_normal()),
+            ("Enter", self._attr_white_bold()),
+            (" confirm  ", self._attr_dim()),
+            ("Esc", self._attr_white_bold()),
+            (" back", self._attr_dim()),
+        ]
+        y = self._draw_box_line_raw(y, box_x, box_width, footer_segments)
+        y = self._draw_box_empty(y, box_x, box_width)
+
+        # -- Box bottom --
+        y = self._draw_box_bottom(y, box_x, box_width)
+
+        stdscr.refresh()
+
+    def _text_input_ansi(self, prompt: str, title: str) -> str | None:
+        """Text input using ANSI escapes (Windows fallback)."""
+        sz = shutil.get_terminal_size((80, 24))
+        w = max(sz.columns, 60)
+        text = ""
+
+        while True:
+            out: list[str] = [_CLEAR_SCREEN]
+            for line in BANNER_LINES_COMPACT:
+                pad = (w - len(line)) // 2
+                out.append(f"{_BOLD}{_FG_CYAN}{' ' * max(pad, 0)}{line}{_RESET}")
+            out.append("")
+            out.append(f"  {_BOLD}{_FG_CYAN}{title or 'Input'}{_RESET}")
+            out.append(f"  {_FG_CYAN}{H_LINE * min(w - 4, 60)}{_RESET}")
+            out.append("")
+            out.append(f"  {_BOLD}{prompt}{_RESET}")
+            out.append("")
+            out.append(f"  {_BOLD}{_FG_CYAN}>{_RESET} {_BOLD}{text}{_RESET}_")
+            out.append("")
+            out.append(
+                f"  {_BOLD}Enter{_RESET}{_DIM} confirm  {_RESET}"
+                f"{_BOLD}Esc{_RESET}{_DIM} back{_RESET}"
+            )
+            try:
+                sys.stdout.write("\n".join(out) + "\n")
+                sys.stdout.flush()
+            except (OSError, IOError):
+                pass
+
+            key = _read_key_windows()
+            if key == KEY_ENTER:
+                return text
+            elif key == KEY_ESC:
+                return None
+            elif key == KEY_BACKSPACE:
+                text = text[:-1]
+            elif len(key) == 1 and key.isprintable():
+                text += key
+
+    # =====================================================================
+    # Loading spinner within curses
+    # =====================================================================
+
+    def show_loading(self, message: str, title: str = "") -> None:
+        """Show a loading/spinner screen within curses.
+
+        Call this from the main thread before starting background work.
+        The spinner runs in a separate thread until :meth:`hide_loading`
+        is called.
+        """
+        self._loading = True
+        self._enter_interactive()
+
+        def _spin() -> None:
+            frames = ["   ", ".  ", ".. ", "...", " ..", "  .", "   "]
+            idx = 0
+            while self._loading:
+                self._render_loading(message, title, frames[idx % len(frames)])
+                idx += 1
+                time.sleep(0.3)
+
+        self._loading_thread = threading.Thread(target=_spin, daemon=True)
+        self._loading_thread.start()
+
+    def hide_loading(self) -> None:
+        """Stop the loading screen and restore the terminal.
+
+        Safe to call multiple times -- subsequent calls are no-ops.
+        """
+        if not self._loading and self._loading_thread is None:
+            return
+        self._loading = False
+        if self._loading_thread is not None:
+            self._loading_thread.join(timeout=2.0)
+            self._loading_thread = None
+        if self._stdscr is not None or _IS_WINDOWS:
+            self._exit_interactive()
+
+    def _render_loading(self, message: str, title: str, spinner: str) -> None:
+        """Render the loading spinner screen inside curses."""
+        if _IS_WINDOWS:
+            self._render_loading_ansi(message, title, spinner)
+            return
+
+        import curses
+
+        stdscr = self._stdscr
+        if stdscr is None:
+            return
+
+        try:
+            stdscr.erase()
+            w, h = self._get_screen_size()
+            box_width = min(w - 2, 60)
+            box_x = max((w - box_width) // 2, 0)
+
+            y = 0
+
+            # -- Banner --
+            y = self._draw_banner(y, w)
+            y += 1
+
+            # -- Box top --
+            y = self._draw_box_top(y, box_x, box_width, title or "Loading")
+            y = self._draw_box_empty(y, box_x, box_width)
+            y = self._draw_box_empty(y, box_x, box_width)
+
+            # -- Spinner + message --
+            y = self._draw_box_line_raw(
+                y, box_x, box_width,
+                [
+                    ("    ", self._attr_normal()),
+                    (spinner, self._attr_cyan_bold()),
+                    ("  ", self._attr_normal()),
+                    (message, self._attr_white_bold()),
+                ],
+            )
+            y = self._draw_box_empty(y, box_x, box_width)
+            y = self._draw_box_empty(y, box_x, box_width)
+
+            # -- Box bottom --
+            y = self._draw_box_bottom(y, box_x, box_width)
+
+            stdscr.refresh()
+        except Exception:
+            pass  # curses may raise if terminal resized during loading
+
+    def _render_loading_ansi(self, message: str, title: str, spinner: str) -> None:
+        """Render loading screen with ANSI codes (Windows fallback)."""
+        sz = shutil.get_terminal_size((80, 24))
+        w = max(sz.columns, 60)
+        out: list[str] = [_CLEAR_SCREEN]
+        for line in BANNER_LINES_COMPACT:
+            pad = (w - len(line)) // 2
+            out.append(f"{_BOLD}{_FG_CYAN}{' ' * max(pad, 0)}{line}{_RESET}")
+        out.append("")
+        out.append(f"  {_BOLD}{_FG_CYAN}{title or 'Loading'}{_RESET}")
+        out.append(f"  {_FG_CYAN}{H_LINE * min(w - 4, 40)}{_RESET}")
+        out.append("")
+        out.append(f"    {_BOLD}{_FG_CYAN}{spinner}{_RESET}  {_BOLD}{message}{_RESET}")
+        out.append("")
+        try:
+            sys.stdout.write("\n".join(out) + "\n")
+            sys.stdout.flush()
+        except (OSError, IOError):
+            pass
+
+    # =====================================================================
+    # Search results table selector
+    # =====================================================================
+
+    def select_search_results(
+        self,
+        results: list[dict],
+        title: str = "Select a title",
+    ) -> int | None:
+        """Select from search results displayed as a formatted table.
+
+        Each result dict must have keys: ``type``, ``title``, ``year``,
+        ``service``.
+
+        Returns the selected index or ``None`` if cancelled.
+        """
+        if not results:
+            return None
+
+        # Build plain-text labels for filtering
+        labels = [
+            f"{r.get('type', '')} {r.get('title', '')} {r.get('year', '')} {r.get('service', '')}"
+            for r in results
+        ]
+        state = _ListState(items=labels)
+        page = self._page_size()
+
+        self._enter_interactive()
+        try:
+            while True:
+                page = self._page_size()
+                self._render_search_results(state, results, title, page)
+                key = self._read_key()
+
+                if key == KEY_UP:
+                    state.move_cursor(-1, page)
+                elif key == KEY_DOWN:
+                    state.move_cursor(1, page)
+                elif key == KEY_PAGE_UP:
+                    state.move_cursor(-page, page)
+                elif key == KEY_PAGE_DOWN:
+                    state.move_cursor(page, page)
+                elif key == KEY_HOME:
+                    state.move_cursor(-len(state.filtered_indices), page)
+                elif key == KEY_END:
+                    state.move_cursor(len(state.filtered_indices), page)
+                elif key == KEY_ENTER:
+                    return state.cursor_real()
+                elif key == KEY_ESC:
+                    if state.filter_text:
+                        state.filter_text = ""
+                        state.refilter()
+                    else:
+                        return None
+                elif key == KEY_BACKSPACE:
+                    if state.filter_text:
+                        state.filter_text = state.filter_text[:-1]
+                        state.refilter()
+                elif key == KEY_Q and not state.filter_text:
+                    return None
+                elif len(key) == 1 and key.isprintable():
+                    state.filter_text += key
+                    state.refilter()
+        except (KeyboardInterrupt, EOFError):
+            return None
+        except Exception:
+            return None
+        finally:
+            self._exit_interactive()
+
+    def _render_search_results(
+        self,
+        state: _ListState,
+        results: list[dict],
+        title: str,
+        page: int,
+    ) -> None:
+        """Render search results as a table with aligned columns."""
+        if _IS_WINDOWS:
+            self._render_search_results_ansi(state, results, title, page)
+            return
+
+        import curses
+
+        stdscr = self._stdscr
+        if stdscr is None:
+            return
+
+        stdscr.erase()
+        w, h = self._get_screen_size()
+        box_width = min(w - 2, 110)
+        box_x = max((w - box_width) // 2, 0)
+
+        # Column widths: #(4) + Type(7) + Year(6) + Service(8) + gaps(~10) + borders(4)
+        # Title gets the rest
+        inner = box_width - 4  # content area inside box borders + padding
+        col_num = 4    # "  1."
+        col_type = 7   # "FILM   " / "SERIE  " / "ANIME  "
+        col_year = 6   # "2006  "
+        col_svc = 4    # abbreviation
+        # Calculate max service width
+        for r in results:
+            svc = r.get("service", "")
+            col_svc = max(col_svc, len(svc))
+        col_svc = min(col_svc, 20)
+
+        fixed = col_num + 1 + col_type + 1 + col_year + 1 + col_svc + 3  # +3 for cursor prefix
+        col_title = max(10, inner - fixed)
+
+        y = 0
+
+        # -- Banner --
+        y = self._draw_banner(y, w)
+        y += 1
+
+        # -- Box top --
+        y = self._draw_box_top(y, box_x, box_width, title)
+        y = self._draw_box_empty(y, box_x, box_width)
+
+        # -- Filter bar --
+        if state.filter_text:
+            match_word = "matches" if state.visible_count != 1 else "match"
+            y = self._draw_box_line_raw(
+                y, box_x, box_width,
+                [
+                    ("  / ", self._attr_cyan_bold()),
+                    (state.filter_text, self._attr_white_bold()),
+                    ("_", self._attr_cyan_bold()),
+                    (f"  ({state.visible_count} {match_word})", self._attr_dim()),
+                ],
+            )
+            y = self._draw_box_empty(y, box_x, box_width)
+
+        # -- Column header --
+        hdr_segments: list[tuple[str, int]] = [
+            ("   ", self._attr_normal()),  # cursor space
+            (f"{'#':<{col_num}}", self._attr_dim()),
+            (" ", self._attr_normal()),
+            (f"{'Type':<{col_type}}", self._attr_dim()),
+            (" ", self._attr_normal()),
+            (f"{'Title':<{col_title}}", self._attr_dim()),
+            (" ", self._attr_normal()),
+            (f"{'Year':<{col_year}}", self._attr_dim()),
+            (" ", self._attr_normal()),
+            (f"{'Service':<{col_svc}}", self._attr_dim()),
+        ]
+        y = self._draw_box_line_raw(y, box_x, box_width, hdr_segments)
+
+        # -- Header underline --
+        sep_segments: list[tuple[str, int]] = [
+            ("   ", self._attr_normal()),
+            (H_LINE * col_num, self._attr_dim()),
+            (" ", self._attr_normal()),
+            (H_LINE * col_type, self._attr_dim()),
+            (" ", self._attr_normal()),
+            (H_LINE * col_title, self._attr_dim()),
+            (" ", self._attr_normal()),
+            (H_LINE * col_year, self._attr_dim()),
+            (" ", self._attr_normal()),
+            (H_LINE * col_svc, self._attr_dim()),
+        ]
+        y = self._draw_box_line_raw(y, box_x, box_width, sep_segments)
+
+        visible = state.filtered_indices
+        total = len(visible)
+        state._fix_scroll(page)
+        start = state.scroll_offset
+        end = min(start + page, total)
+
+        # -- Scroll up indicator --
+        if start > 0:
+            y = self._draw_box_line_raw(
+                y, box_x, box_width,
+                [(f"  {UP_ARROW} {start} more above", self._attr_dim())],
+            )
+
+        # -- Items --
+        for vi in range(start, end):
+            real_idx = visible[vi]
+            is_cursor = vi == state.cursor
+            r = results[real_idx]
+
+            r_type = r.get("type", "").upper()
+            r_title = r.get("title", "")
+            r_year = str(r.get("year", "")) if r.get("year") else ""
+            r_svc = r.get("service", "")
+
+            # Truncate title if needed
+            if len(r_title) > col_title:
+                r_title = r_title[: col_title - 3] + "..."
+
+            segments: list[tuple[str, int]] = []
+
+            # Cursor arrow
+            if is_cursor:
+                segments.append((" > ", self._attr_cyan_bold()))
+            else:
+                segments.append(("   ", self._attr_normal()))
+
+            # Number
+            segments.append((f"{real_idx + 1:<{col_num}}", self._attr_dim()))
+            segments.append((" ", self._attr_normal()))
+
+            # Type badge
+            if r_type in ("FILM", "SERIE", "ANIME"):
+                segments.append(
+                    (f" {r_type:<{col_type - 1}}", self._badge_attr(r_type))
+                )
+            else:
+                type_style = self._attr_dim()
+                segments.append((f"{r_type:<{col_type}}", type_style))
+            segments.append((" ", self._attr_normal()))
+
+            # Title
+            title_style = self._attr_white_bold() if is_cursor else self._attr_normal()
+            segments.append((f"{r_title:<{col_title}}", title_style))
+            segments.append((" ", self._attr_normal()))
+
+            # Year
+            year_style = self._attr_dim()
+            segments.append((f"{r_year:<{col_year}}", year_style))
+            segments.append((" ", self._attr_normal()))
+
+            # Service
+            segments.append((f"{r_svc:<{col_svc}}", self._attr_dim()))
+
+            y = self._draw_box_line_raw(y, box_x, box_width, segments)
+
+        # -- No results --
+        if total == 0:
+            y = self._draw_box_line_raw(
+                y, box_x, box_width,
+                [("  No matches found", self._attr_dim())],
+            )
+
+        # -- Scroll down indicator --
+        remaining_below = total - end
+        if remaining_below > 0:
+            y = self._draw_box_line_raw(
+                y, box_x, box_width,
+                [(f"  {DOWN_ARROW} {remaining_below} more below", self._attr_dim())],
+            )
+
+        y = self._draw_box_empty(y, box_x, box_width)
+
+        # -- Footer --
+        y = self._draw_footer(y, box_x, box_width, multi=False)
+        y = self._draw_box_empty(y, box_x, box_width)
+
+        # -- Box bottom --
+        y = self._draw_box_bottom(y, box_x, box_width)
+
+        stdscr.refresh()
+
+    def _render_search_results_ansi(
+        self,
+        state: _ListState,
+        results: list[dict],
+        title: str,
+        page: int,
+    ) -> None:
+        """Render search results table using ANSI escapes (Windows fallback)."""
+        sz = shutil.get_terminal_size((80, 24))
+        w = max(sz.columns, 60)
+
+        col_num = 4
+        col_type = 7
+        col_year = 6
+        col_svc = 4
+        for r in results:
+            col_svc = max(col_svc, len(r.get("service", "")))
+        col_svc = min(col_svc, 20)
+        inner = min(w - 4, 106)
+        fixed = col_num + 1 + col_type + 1 + col_year + 1 + col_svc + 3
+        col_title = max(10, inner - fixed)
+
+        out: list[str] = [_CLEAR_SCREEN]
+
+        for line in BANNER_LINES_COMPACT:
+            pad = (w - len(line)) // 2
+            out.append(f"{_BOLD}{_FG_CYAN}{' ' * max(pad, 0)}{line}{_RESET}")
+        out.append("")
+        out.append(f"  {_BOLD}{_FG_CYAN}{title}{_RESET}")
+        out.append(f"  {_FG_CYAN}{H_LINE * min(w - 4, 80)}{_RESET}")
+
+        if state.filter_text:
+            match_word = "matches" if state.visible_count != 1 else "match"
+            out.append(
+                f"  {_BOLD}{_FG_CYAN}/{_RESET} "
+                f"{_BOLD}{state.filter_text}{_RESET}_"
+                f"  {_DIM}({state.visible_count} {match_word}){_RESET}"
+            )
+            out.append("")
+
+        # Header
+        out.append(
+            f"   {_DIM}{'#':<{col_num}} {'Type':<{col_type}} "
+            f"{'Title':<{col_title}} {'Year':<{col_year}} "
+            f"{'Service':<{col_svc}}{_RESET}"
+        )
+        out.append(
+            f"   {_DIM}{H_LINE * col_num} {H_LINE * col_type} "
+            f"{H_LINE * col_title} {H_LINE * col_year} "
+            f"{H_LINE * col_svc}{_RESET}"
+        )
+
+        visible = state.filtered_indices
+        total = len(visible)
+        state._fix_scroll(page)
+        start = state.scroll_offset
+        end = min(start + page, total)
+
+        if start > 0:
+            out.append(f"  {_DIM}{UP_ARROW} {start} more above{_RESET}")
+
+        for vi in range(start, end):
+            real_idx = visible[vi]
+            is_cursor = vi == state.cursor
+            r = results[real_idx]
+
+            r_type = r.get("type", "").upper()
+            r_title = r.get("title", "")
+            r_year = str(r.get("year", "")) if r.get("year") else ""
+            r_svc = r.get("service", "")
+
+            if len(r_title) > col_title:
+                r_title = r_title[: col_title - 3] + "..."
+
+            cursor = f" {_BOLD}{_FG_CYAN}>{_RESET} " if is_cursor else "   "
+
+            badge_colors = {
+                "FILM": (_BG_BLUE, _FG_BRIGHT_WHITE),
+                "SERIE": (_BG_MAGENTA, _FG_BRIGHT_WHITE),
+                "ANIME": (_BG_RED, _FG_BRIGHT_WHITE),
+            }
+            if r_type in badge_colors:
+                bg, fg = badge_colors[r_type]
+                type_str = f"{bg}{fg}{_BOLD} {r_type:<{col_type - 1}}{_RESET}"
+            else:
+                type_str = f"{_DIM}{r_type:<{col_type}}{_RESET}"
+
+            title_style = f"{_BOLD}" if is_cursor else ""
+
+            line = (
+                f"{cursor}"
+                f"{_DIM}{real_idx + 1:<{col_num}}{_RESET} "
+                f"{type_str} "
+                f"{title_style}{r_title:<{col_title}}{_RESET} "
+                f"{_DIM}{r_year:<{col_year}}{_RESET} "
+                f"{_DIM}{r_svc:<{col_svc}}{_RESET}"
+            )
+            out.append(line)
+
+        if total == 0:
+            out.append(f"  {_DIM}No matches found{_RESET}")
+
+        remaining = total - end
+        if remaining > 0:
+            out.append(f"  {_DIM}{DOWN_ARROW} {remaining} more below{_RESET}")
+
+        out.append("")
+        out.append(
+            f"  {_BOLD}Enter{_RESET}{_DIM} confirm  {_RESET}"
+            f"{_BOLD}Esc{_RESET}{_DIM} back  {_RESET}"
+            f"{_BOLD}/{_RESET}{_DIM} filter{_RESET}"
+        )
+
+        try:
+            sys.stdout.write("\n".join(out) + "\n")
+            sys.stdout.flush()
+        except (OSError, IOError):
+            pass
 
     # =====================================================================
     # Terminal setup/teardown
@@ -708,8 +1339,13 @@ class InteractiveSelector:
     # =====================================================================
 
     def _draw_banner(self, y: int, width: int) -> int:
-        """Draw the centered banner at row y. Returns next row."""
-        for line in BANNER_LINES:
+        """Draw the centered banner at row y. Returns next row.
+
+        Uses the large block-character banner when the terminal is at least
+        90 columns wide; otherwise falls back to the compact version.
+        """
+        banner = BANNER_LINES_LARGE if width >= 90 else BANNER_LINES_COMPACT
+        for line in banner:
             pad = (width - len(line)) // 2
             self._safe_addstr(y, max(pad, 0), line, self._attr_cyan_bold())
             y += 1
@@ -806,15 +1442,23 @@ class InteractiveSelector:
         max_y, max_x = self._stdscr.getmaxyx()
         return max(max_x, 60), max(max_y, 16)
 
+    def _banner_height(self, width: int) -> int:
+        """Return the number of rows the banner occupies (lines + version)."""
+        if width >= 90:
+            return len(BANNER_LINES_LARGE) + 1  # 7
+        return len(BANNER_LINES_COMPACT) + 1  # 4
+
     def _page_size(self) -> int:
-        _, h = self._get_screen_size()
-        # Reserve: banner(5) + title(2) + filter(2) + footer(3) + border(4) + padding(4)
-        overhead = 18
+        w, h = self._get_screen_size()
+        banner_h = self._banner_height(w)
+        # Reserve: banner + title(2) + filter(2) + footer(3) + border(4) + padding(4)
+        overhead = banner_h + 15
         return max(3, h - overhead)
 
     def _page_size_tracks(self) -> int:
-        _, h = self._get_screen_size()
-        per_section = (h - 22) // 3
+        w, h = self._get_screen_size()
+        banner_h = self._banner_height(w)
+        per_section = (h - banner_h - 18) // 3
         return max(2, per_section)
 
     # =====================================================================
@@ -1489,7 +2133,8 @@ class InteractiveSelector:
         out: list[str] = [_CLEAR_SCREEN]
 
         # Banner
-        for line in BANNER_LINES:
+        banner = BANNER_LINES_LARGE if w >= 90 else BANNER_LINES_COMPACT
+        for line in banner:
             pad = (w - len(line)) // 2
             out.append(f"{_BOLD}{_FG_CYAN}{' ' * max(pad, 0)}{line}{_RESET}")
         if self._version:
@@ -1609,7 +2254,8 @@ class InteractiveSelector:
         out: list[str] = [_CLEAR_SCREEN]
 
         # Banner
-        for line in BANNER_LINES:
+        banner = BANNER_LINES_LARGE if w >= 90 else BANNER_LINES_COMPACT
+        for line in banner:
             pad = (w - len(line)) // 2
             out.append(f"{_BOLD}{_FG_CYAN}{' ' * max(pad, 0)}{line}{_RESET}")
         if self._version:

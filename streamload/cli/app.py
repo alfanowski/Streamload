@@ -18,7 +18,6 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from rich.console import Console
-from rich.status import Status
 
 from streamload.cli.i18n import I18n
 from streamload.cli.terminal import TerminalManager
@@ -345,6 +344,7 @@ class StreamloadApp:
         """Check GitHub for a newer version and offer to update."""
         assert self._updater is not None
         assert self._prompts is not None
+        assert self._selector is not None
         assert self._i18n is not None
 
         try:
@@ -363,10 +363,13 @@ class StreamloadApp:
             self._i18n.t("system.update_prompt", version=info.version),
             default=False,
         ):
-            with Status(
-                self._i18n.t("system.updating"), console=self._console
-            ):
+            self._selector.show_loading(
+                self._i18n.t("system.updating"), title="Updating"
+            )
+            try:
                 success = self._updater.apply_update(info, project_root=Path.cwd())
+            finally:
+                self._selector.hide_loading()
             if success:
                 self._prompts.show_success(
                     self._i18n.t("system.update_done", version=info.version)
@@ -432,25 +435,28 @@ class StreamloadApp:
     def _global_search(self) -> None:
         """Search across all loaded services in parallel.
 
-        Displays a spinner per service while results stream in, then
-        shows an aggregated results table.
+        Uses the curses text input for the query, a curses loading
+        spinner while searching, and the curses table selector for
+        results.
         """
         assert self._prompts is not None
+        assert self._selector is not None
         assert self._i18n is not None
 
-        query = self._prompts.ask(self._i18n.t("search.prompt"))
-        if not query.strip():
+        query = self._selector.text_input(
+            self._i18n.t("search.prompt"),
+            title=self._i18n.t("menu.global_search"),
+        )
+        if query is None or not query.strip():
             return
 
-        self._console.print()
         results: list[SearchResult] = []
 
-        with Status(
+        self._selector.show_loading(
             self._i18n.t("search.global_searching"),
-            console=self._console,
-            spinner="dots",
-        ):
-
+            title=self._i18n.t("menu.global_search"),
+        )
+        try:
             def _on_progress(service_name: str, status: str, count: int) -> None:
                 log.info(
                     "Global search: %s -> %s (%d results)",
@@ -464,6 +470,8 @@ class StreamloadApp:
                 self._services,
                 on_progress=_on_progress,
             )
+        finally:
+            self._selector.hide_loading()
 
         if not results:
             self._prompts.show_warning(
@@ -474,42 +482,46 @@ class StreamloadApp:
         # Enrich with TMDB metadata.
         self._enrich_results(results)
 
-        self._prompts.show_info(
-            self._i18n.t("search.results_found", count=len(results), query=query)
-        )
-
         # Let the user pick one.
         self._pick_from_results(results)
 
     def _service_search(self, service: ServiceBase) -> None:
         """Search within a single service."""
         assert self._prompts is not None
+        assert self._selector is not None
         assert self._i18n is not None
 
-        query = self._prompts.ask(self._i18n.t("search.prompt"))
-        if not query.strip():
+        query = self._selector.text_input(
+            self._i18n.t("search.prompt"),
+            title=f"Search {service.name}",
+        )
+        if query is None or not query.strip():
             return
 
-        self._console.print()
         entries: list[MediaEntry] = []
 
-        with Status(
+        search_error: Exception | None = None
+        self._selector.show_loading(
             self._i18n.t("search.searching", service=service.name),
-            console=self._console,
-            spinner="dots",
-        ):
-            try:
-                entries = service.search(query)
-            except Exception as exc:
-                log.error("Search failed on %s", service.name, exc_info=True)
-                self._prompts.show_error(
-                    self._i18n.t(
-                        "error.service",
-                        service=service.name,
-                        message=str(exc),
-                    )
+            title=f"Search {service.name}",
+        )
+        try:
+            entries = service.search(query)
+        except Exception as exc:
+            search_error = exc
+        finally:
+            self._selector.hide_loading()
+
+        if search_error is not None:
+            log.error("Search failed on %s", service.name, exc_info=True)
+            self._prompts.show_error(
+                self._i18n.t(
+                    "error.service",
+                    service=service.name,
+                    message=str(search_error),
                 )
-                return
+            )
+            return
 
         if not entries:
             self._prompts.show_warning(
@@ -528,10 +540,6 @@ class StreamloadApp:
 
         # Enrich with TMDB metadata.
         self._enrich_results(results)
-
-        self._prompts.show_info(
-            self._i18n.t("search.results_found", count=len(results), query=query)
-        )
 
         self._pick_from_results(results)
 
@@ -564,20 +572,34 @@ class StreamloadApp:
         return self._services[keys[idx]]
 
     def _pick_from_results(self, results: list[SearchResult]) -> None:
-        """Let the user pick a result using the interactive selector."""
+        """Let the user pick a result using the table-based selector."""
         assert self._selector is not None
 
         if not results:
             return
 
-        from streamload.cli.ui.tables import format_search_result
+        # Build structured data for the table renderer
+        table_data = []
+        for r in results:
+            entry = r.entry
+            svc_abbr = r.service_display_name
+            # Abbreviate long service names
+            _SVC_SHORT = {
+                "StreamingCommunity": "SC",
+                "AnimeUnity": "AU",
+                "AniList": "AL",
+            }
+            svc_short = _SVC_SHORT.get(svc_abbr, svc_abbr)
+            table_data.append({
+                "type": entry.type.value.upper(),
+                "title": entry.title,
+                "year": entry.year or "",
+                "service": svc_short,
+            })
 
-        options = [format_search_result(r) for r in results]
-
-        idx = self._selector.select_from_list(
-            options,
+        idx = self._selector.select_search_results(
+            table_data,
             title="Select a title",
-            show_type_badge=True,
         )
         if idx is None or idx >= len(results):
             return
@@ -659,18 +681,23 @@ class StreamloadApp:
 
         # Fetch seasons.
         seasons: list[Season] = []
-        with Status(
+        season_error: Exception | None = None
+        self._selector.show_loading(
             f"Loading seasons for {entry.title}...",
-            console=self._console,
-            spinner="dots",
-        ):
-            try:
-                seasons = service.get_seasons(entry)
-            except Exception as exc:
-                self._prompts.show_error(
-                    self._i18n.t("error.service", service=service.name, message=str(exc))
-                )
-                return
+            title=entry.title,
+        )
+        try:
+            seasons = service.get_seasons(entry)
+        except Exception as exc:
+            season_error = exc
+        finally:
+            self._selector.hide_loading()
+
+        if season_error is not None:
+            self._prompts.show_error(
+                self._i18n.t("error.service", service=service.name, message=str(season_error))
+            )
+            return
 
         if not seasons:
             self._prompts.show_warning("No seasons found.")
@@ -689,18 +716,23 @@ class StreamloadApp:
 
         # Fetch episodes.
         episodes: list[Episode] = []
-        with Status(
+        ep_error: Exception | None = None
+        self._selector.show_loading(
             f"Loading episodes for Season {selected_season.number}...",
-            console=self._console,
-            spinner="dots",
-        ):
-            try:
-                episodes = service.get_episodes(selected_season)
-            except Exception as exc:
-                self._prompts.show_error(
-                    self._i18n.t("error.service", service=service.name, message=str(exc))
-                )
-                return
+            title=entry.title,
+        )
+        try:
+            episodes = service.get_episodes(selected_season)
+        except Exception as exc:
+            ep_error = exc
+        finally:
+            self._selector.hide_loading()
+
+        if ep_error is not None:
+            self._prompts.show_error(
+                self._i18n.t("error.service", service=service.name, message=str(ep_error))
+            )
+            return
 
         if not episodes:
             self._prompts.show_warning("No episodes found.")
@@ -754,25 +786,32 @@ class StreamloadApp:
     ) -> StreamBundle | None:
         """Resolve streams for an item, showing a spinner."""
         assert self._prompts is not None
+        assert self._selector is not None
         assert self._i18n is not None
 
         name = item.title if isinstance(item, MediaEntry) else f"E{item.number:02d} {item.title}"
 
-        with Status(
+        stream_error: Exception | None = None
+        bundle: StreamBundle | None = None
+        self._selector.show_loading(
             f"Resolving streams for {name}...",
-            console=self._console,
-            spinner="dots",
-        ):
-            try:
-                bundle = service.get_streams(item)
-            except Exception as exc:
-                self._prompts.show_error(
-                    self._i18n.t("error.no_streams", name=name) + f"\n{exc}"
-                )
-                log.error("get_streams failed for %s", name, exc_info=True)
-                return None
+            title="Stream Resolution",
+        )
+        try:
+            bundle = service.get_streams(item)
+        except Exception as exc:
+            stream_error = exc
+        finally:
+            self._selector.hide_loading()
 
-        if not bundle.video:
+        if stream_error is not None:
+            self._prompts.show_error(
+                self._i18n.t("error.no_streams", name=name) + f"\n{stream_error}"
+            )
+            log.error("get_streams failed for %s", name, exc_info=True)
+            return None
+
+        if bundle is None or not bundle.video:
             self._prompts.show_error(
                 self._i18n.t("error.no_streams", name=name)
             )
@@ -914,15 +953,16 @@ class StreamloadApp:
             try:
                 config = self._config_mgr.config
 
+                on_off = self._i18n.t("settings.on") if config.auto_update else self._i18n.t("settings.off")
                 settings_choices = [
                     f"{self._i18n.t('settings.language')}: {config.language}",
-                    f"Preferred audio: {config.preferred_audio}",
-                    f"Preferred subtitle: {config.preferred_subtitle}",
+                    f"{self._i18n.t('settings.preferred_audio')}: {config.preferred_audio}",
+                    f"{self._i18n.t('settings.preferred_subtitle')}: {config.preferred_subtitle}",
                     f"{self._i18n.t('settings.output_path')}: {config.output.root_path}",
-                    f"Output format: {config.output.extension}",
-                    f"Max concurrent downloads: {config.download.max_concurrent}",
-                    f"Thread count: {config.download.thread_count}",
-                    f"Auto-update: {'on' if config.auto_update else 'off'}",
+                    f"{self._i18n.t('settings.output_format')}: {config.output.extension}",
+                    f"{self._i18n.t('settings.max_concurrent')}: {config.download.max_concurrent}",
+                    f"{self._i18n.t('settings.thread_count')}: {config.download.thread_count}",
+                    f"{self._i18n.t('settings.auto_update')}: {on_off}",
                     self._i18n.t("menu.back"),
                 ]
 
@@ -979,13 +1019,15 @@ class StreamloadApp:
     def _change_output_path(self) -> None:
         """Change the download root directory."""
         assert self._prompts is not None
+        assert self._selector is not None
         assert self._i18n is not None
 
         config = self._config_mgr.config
-        new_path = self._prompts.ask(
-            "Output directory", default=config.output.root_path
+        new_path = self._selector.text_input(
+            f"Output directory (current: {config.output.root_path})",
+            title="Settings",
         )
-        if new_path.strip():
+        if new_path is not None and new_path.strip():
             config.output.root_path = new_path.strip()
             self._config_mgr.save_config(config)
             self._prompts.show_success(self._i18n.t("settings.saved"))
@@ -1011,12 +1053,16 @@ class StreamloadApp:
     def _change_setting_string(self, field_path: str, label: str) -> None:
         """Change a string configuration value by dotted path."""
         assert self._prompts is not None
+        assert self._selector is not None
         assert self._i18n is not None
 
         config = self._config_mgr.config
         current = self._get_config_field(config, field_path)
-        new_val = self._prompts.ask(label, default=str(current))
-        if new_val.strip():
+        new_val = self._selector.text_input(
+            f"{label} (current: {current})",
+            title="Settings",
+        )
+        if new_val is not None and new_val.strip():
             self._set_config_field(config, field_path, new_val.strip())
             self._config_mgr.save_config(config)
             self._prompts.show_success(self._i18n.t("settings.saved"))
@@ -1026,11 +1072,17 @@ class StreamloadApp:
     ) -> None:
         """Change an integer configuration value with range clamping."""
         assert self._prompts is not None
+        assert self._selector is not None
         assert self._i18n is not None
 
         config = self._config_mgr.config
         current = self._get_config_field(config, field_path)
-        raw = self._prompts.ask(f"{label} ({lo}-{hi})", default=str(current))
+        raw = self._selector.text_input(
+            f"{label} ({lo}-{hi}, current: {current})",
+            title="Settings",
+        )
+        if raw is None:
+            return
         try:
             value = max(lo, min(hi, int(raw)))
             self._set_config_field(config, field_path, value)
