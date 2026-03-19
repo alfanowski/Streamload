@@ -1154,6 +1154,15 @@ class InteractiveSelector:
             pass
         self._stdscr = None
 
+        # curses.endwin() exits the alternate screen that curses used,
+        # which also exits the TerminalManager's alternate screen.
+        # Re-enter it so subsequent output stays clean.
+        try:
+            sys.stdout.write("\033[?1049h\033[H\033[2J")
+            sys.stdout.flush()
+        except (OSError, IOError):
+            pass
+
     def _read_key(self) -> str:
         """Read a single keypress."""
         if _IS_WINDOWS:

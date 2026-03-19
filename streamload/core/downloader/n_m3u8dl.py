@@ -223,30 +223,10 @@ class N_m3u8dlDownloader:
         log.info("N_m3u8DL-RE command: %s", " ".join(cmd))
 
         try:
-            proc = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                bufsize=1,
-            )
-
-            for line in proc.stdout:
-                line = line.strip()
-                if not line:
-                    continue
-                parsed = self._parse_progress(line)
-                if parsed:
-                    callbacks.on_progress(DownloadProgress(
-                        download_id=download_id,
-                        filename=filename,
-                        downloaded=parsed.get("downloaded", 0),
-                        total=parsed.get("total", 0),
-                        speed=parsed.get("speed_bytes", 0),
-                    ))
-
+            # Let N_m3u8DL-RE display its own progress directly to the terminal.
+            # Don't capture stdout - its native progress bars are better than
+            # anything we could render.
+            proc = subprocess.Popen(cmd)
             proc.wait()
 
             if proc.returncode != 0:
