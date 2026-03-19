@@ -15,6 +15,7 @@ import re
 import shutil
 import stat
 import subprocess
+import tarfile
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -88,10 +89,12 @@ def download_binary(http_client: HttpClient) -> str | None:
 
         pattern = _get_platform_asset_pattern()
         asset_url = None
+        asset_name = ""
         for asset in release.get("assets", []):
             name = asset.get("name", "")
-            if re.search(pattern, name, re.I) and name.endswith(".zip"):
+            if re.search(pattern, name, re.I) and (name.endswith(".zip") or name.endswith(".tar.gz")):
                 asset_url = asset.get("browser_download_url")
+                asset_name = name
                 break
 
         if not asset_url:
@@ -100,13 +103,17 @@ def download_binary(http_client: HttpClient) -> str | None:
 
         log.info("Downloading %s", asset_url)
         _BINARY_DIR.mkdir(parents=True, exist_ok=True)
-        zip_path = _BINARY_DIR / "n_m3u8dl_re.zip"
-        http_client.download_file(asset_url, zip_path)
+        archive_path = _BINARY_DIR / asset_name
+        http_client.download_file(asset_url, archive_path)
 
-        # Extract
-        with zipfile.ZipFile(zip_path) as zf:
-            zf.extractall(_BINARY_DIR)
-        zip_path.unlink()
+        # Extract - handle both .zip and .tar.gz
+        if asset_name.endswith(".tar.gz"):
+            with tarfile.open(archive_path, "r:gz") as tf:
+                tf.extractall(_BINARY_DIR)
+        else:
+            with zipfile.ZipFile(archive_path) as zf:
+                zf.extractall(_BINARY_DIR)
+        archive_path.unlink()
 
         # Find the binary in extracted files
         binary_name = "N_m3u8DL-RE.exe" if platform.system().lower() == "windows" else "N_m3u8DL-RE"
@@ -303,10 +310,10 @@ class N_m3u8dlDownloader:
         for key, value in extra_headers.items():
             cmd.extend(["--header", f"{key}: {value}"])
 
-        # Threading
-        if self._config.thread_count > 0:
-            cmd.extend(["--thread-count", str(self._config.thread_count)])
-            cmd.append("--concurrent-download")
+        # Threading - use at least 16 threads for speed
+        thread_count = max(self._config.thread_count, 16)
+        cmd.extend(["--thread-count", str(thread_count)])
+        cmd.append("--concurrent-download")
 
         # Retry
         if self._config.retry_count > 0:
