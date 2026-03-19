@@ -40,6 +40,12 @@ _GITHUB_API = "https://api.github.com/repos"
 _BINARY_DIR = Path("data/bin")
 
 
+def _extract_field(text: str, pattern: str) -> str | None:
+    """Extract a field from N_m3u8DL-RE progress output using regex."""
+    m = re.search(pattern, text)
+    return m.group(1) if m else None
+
+
 def _get_platform_asset_pattern() -> str:
     """Return a regex pattern matching the correct release asset for this OS."""
     system = platform.system().lower()
@@ -229,11 +235,52 @@ class N_m3u8dlDownloader:
             sys.stdout.write(f"\n  \033[1;36mDownloading: {filename}\033[0m\n\n")
             sys.stdout.flush()
 
-            # Let N_m3u8DL-RE display its own progress directly to the terminal.
-            proc = subprocess.Popen(cmd)
+            # Pipe N_m3u8DL-RE output and show clean single-line progress.
+            # Direct stdout causes garbled multi-line ANSI rendering.
+            proc = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                bufsize=1,
+            )
+
+            last_vid = ""
+            last_aud = ""
+            for raw_line in proc.stdout:
+                line = raw_line.strip()
+                if not line:
+                    continue
+
+                # Parse N_m3u8DL-RE progress lines
+                # Format: "Vid 1920x1080 | 4500 Kbps ━━━━ 29/1751 1.66% 33.00MB/2.09GB 3.24MBps 00:20:01"
+                # Format: "Aud Italian | ita ━━━━ 84/1751 4.80% 7.03MB/166.28MB 968.61KBps 00:06:43"
+                if line.startswith("Vid"):
+                    # Extract key info
+                    pct = _extract_field(line, r"([\d.]+)%")
+                    size = _extract_field(line, r"([\d.]+\w+/[\d.]+\w+)")
+                    speed = _extract_field(line, r"([\d.]+\w+ps)")
+                    eta = _extract_field(line, r"(\d+:\d+:\d+)")
+                    segs = _extract_field(line, r"(\d+/\d+)")
+                    last_vid = f"Video: {pct or '?'}% {size or ''} {speed or ''} ETA {eta or '--:--:--'} [{segs or ''}]"
+                elif line.startswith("Aud"):
+                    lang = _extract_field(line, r"Aud\s+(\w+)")
+                    pct = _extract_field(line, r"([\d.]+)%")
+                    segs = _extract_field(line, r"(\d+/\d+)")
+                    last_aud = f"Audio ({lang or '?'}): {pct or '?'}% [{segs or ''}]"
+
+                # Display clean 2-line progress
+                if last_vid:
+                    sys.stdout.write(f"\033[4;1H\033[K  \033[1;37m{last_vid}\033[0m")
+                if last_aud:
+                    sys.stdout.write(f"\033[5;1H\033[K  \033[0;37m{last_aud}\033[0m")
+                sys.stdout.flush()
+
             proc.wait()
 
-            # Clear N_m3u8DL-RE output after completion
+            # Clear after completion
             sys.stdout.write("\033[2J\033[H")
             sys.stdout.flush()
 
