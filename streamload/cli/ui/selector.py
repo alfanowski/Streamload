@@ -1,8 +1,15 @@
 """Interactive terminal selector for the Streamload CLI.
 
-FZF-style keyboard-driven selector with fuzzy filtering, scrollable windows,
-multi-select, and an all-in-one track selection screen.  Works cross-platform
-using :mod:`termios` on Unix and :mod:`msvcrt` on Windows.
+Bulletproof FZF-style keyboard-driven selector with fuzzy filtering, scrollable
+windows, multi-select, and an all-in-one track selection screen.
+
+Key design decisions for macOS/Linux reliability:
+- Uses ``tty.setcbreak()`` instead of ``tty.setraw()`` to preserve signal
+  handling (Ctrl+C fires KeyboardInterrupt naturally).
+- Uses ``os.read(fd, ...)`` for keypress reading instead of ``sys.stdin.read()``.
+- Renders with ``sys.stdout.write()`` + ANSI escape codes instead of Rich
+  ``Console.clear()`` / ``Console.print()`` to avoid conflicts with cbreak mode.
+- Single try/finally block wraps ALL terminal manipulation.
 
 Exports :class:`InteractiveSelector` with three public methods:
 
@@ -13,16 +20,13 @@ Exports :class:`InteractiveSelector` with three public methods:
 
 from __future__ import annotations
 
+import os
 import platform
 import re
 import shutil
 import sys
 from dataclasses import dataclass, field
 from typing import Sequence
-
-from rich.console import Console
-from rich.panel import Panel
-from rich.text import Text
 
 from streamload.models.media import Episode, MediaType
 from streamload.models.stream import (
@@ -50,117 +54,182 @@ KEY_PAGE_DOWN = "page_down"
 KEY_HOME = "home"
 KEY_END = "end"
 
-# Single-character key names returned verbatim.
 KEY_Q = "q"
 KEY_A = "a"
 KEY_N = "n"
+
+# ---------------------------------------------------------------------------
+# ANSI escape helpers
+# ---------------------------------------------------------------------------
+
+_IS_WINDOWS = platform.system() == "Windows"
+
+# Escape sequences for terminal control
+ESC = "\033"
+CLEAR_SCREEN = f"{ESC}[2J{ESC}[H"
+HIDE_CURSOR = f"{ESC}[?25l"
+SHOW_CURSOR = f"{ESC}[?25h"
+
+# ANSI color/style codes
+RESET = f"{ESC}[0m"
+BOLD = f"{ESC}[1m"
+DIM = f"{ESC}[2m"
+UNDERLINE = f"{ESC}[4m"
+BLINK = f"{ESC}[5m"
+
+FG_RED = f"{ESC}[31m"
+FG_GREEN = f"{ESC}[32m"
+FG_YELLOW = f"{ESC}[33m"
+FG_BLUE = f"{ESC}[34m"
+FG_MAGENTA = f"{ESC}[35m"
+FG_CYAN = f"{ESC}[36m"
+FG_WHITE = f"{ESC}[37m"
+FG_BRIGHT_WHITE = f"{ESC}[97m"
+
+BG_BLUE = f"{ESC}[44m"
+BG_MAGENTA = f"{ESC}[45m"
+BG_RED = f"{ESC}[41m"
+BG_CYAN = f"{ESC}[46m"
+
+# ---------------------------------------------------------------------------
+# Eye-catching ASCII banner
+# ---------------------------------------------------------------------------
+
+BANNER = f"""\
+{BOLD}{FG_CYAN}  ╔═══╗╔════╗╔═══╗╔═══╗╔═══╗╔╗╔╗╔╗  ╔═══╗╔═══╗╔═══╗
+  ║╔═╗║║╔╗╔╗║║╔═╗║║╔══╝║╔═╗║║║║║║║  ║╔═╗║║╔═╗║╚╗╔╗║
+  ║╚══╗╚╝║║╚╝║╚═╗║║╚══╗║║ ║║║╚╝║║║  ║║ ║║║║ ║║ ║║║║
+  ╚══╗║  ║║  ║╔═╗║║╔══╝║╚═╝║║╔╗║║║  ║║ ║║║╚═╝║ ║║║║
+  ║╚═╝║  ║║  ║╚═╝║║╚══╗║╔═╗║║║║╚╣╚═╗║╚═╝║║╔═╗║╔╝╚╝║
+  ╚═══╝  ╚╝  ╚═══╝╚═══╝╚╝ ╚╝╚╝╚═╩══╝╚═══╝╚╝ ╚╝╚═══╝{RESET}"""
+
+# Compact fallback (3-line)
+BANNER_COMPACT = f"""\
+{BOLD}{FG_CYAN} ╔═╗╔╦╗╦═╗╔═╗╔═╗╔╦╗╦  ╔═╗╔═╗╔╦╗
+ ╚═╗ ║ ╠╦╝║╣ ╠═╣║║║║  ║ ║╠═╣ ║║
+ ╚═╝ ╩ ╩╚═╚═╝╩ ╩╩ ╩╩═╝╚═╝╩ ╩═╩╝{RESET}"""
+
+# Unicode glyphs
+UP_ARROW = "\u25b2"
+DOWN_ARROW = "\u25bc"
+RIGHT_ARROW = "\u25b6"
+H_LINE = "\u2500"
+DOT = "\u2022"
+
+# Badge styles for media types (bg_color, fg_color)
+_BADGE_COLORS: dict[str, tuple[str, str]] = {
+    "FILM": (BG_BLUE, FG_BRIGHT_WHITE),
+    "SERIE": (BG_MAGENTA, FG_BRIGHT_WHITE),
+    "ANIME": (BG_RED, FG_BRIGHT_WHITE),
+}
 
 # ---------------------------------------------------------------------------
 # Cross-platform raw key reading
 # ---------------------------------------------------------------------------
 
 
-def _read_key_unix() -> str:
-    """Read a single keypress on Unix (macOS / Linux).
+def _read_key_unix(fd: int) -> str:
+    """Read a single keypress on Unix using cbreak mode and os.read.
 
-    Uses :mod:`termios` to switch stdin into raw mode for the duration of
-    the read.  Handles ANSI escape sequences for arrow keys, Page Up/Down,
-    Home/End, and Shift-Tab.
+    The terminal must already be in cbreak mode (done by the caller).
+    Uses ``os.read(fd, 1)`` for the first byte, then ``os.read(fd, 10)``
+    to slurp any remaining escape sequence bytes in a non-blocking fashion.
     """
-    import termios
-    import tty
-
-    fd = sys.stdin.fileno()
     try:
-        old = termios.tcgetattr(fd)
-    except termios.error:
-        # Fallback for non-standard terminals
-        return sys.stdin.read(1) or ""
-    try:
-        tty.setraw(fd)
-        ch = sys.stdin.read(1)
-        if not ch:
-            return ""
-
-        if ch == "\x1b":
-            # Check if more data is available (avoid blocking on bare Esc)
-            import select
-            if select.select([sys.stdin], [], [], 0.05)[0]:
-                seq1 = sys.stdin.read(1)
-            else:
-                return KEY_ESC
-
-            if seq1 == "[":
-                seq2 = sys.stdin.read(1)
-                # Arrow keys
-                if seq2 == "A":
-                    return KEY_UP
-                if seq2 == "B":
-                    return KEY_DOWN
-                if seq2 == "C":
-                    return "right"
-                if seq2 == "D":
-                    return "left"
-                # Home / End (some terminals)
-                if seq2 == "H":
-                    return KEY_HOME
-                if seq2 == "F":
-                    return KEY_END
-                # Extended sequences: Page Up/Down, Home/End, etc.
-                if seq2 in ("1", "2", "3", "4", "5", "6"):
-                    seq3 = sys.stdin.read(1)
-                    if seq3 == "~":
-                        return {
-                            "1": KEY_HOME,
-                            "2": "insert",
-                            "3": "delete",
-                            "4": KEY_END,
-                            "5": KEY_PAGE_UP,
-                            "6": KEY_PAGE_DOWN,
-                        }.get(seq2, "")
-                    # Shift+Arrow: \x1b[1;2A etc.
-                    if seq2 == "1" and seq3 == ";":
-                        _mod = sys.stdin.read(1)
-                        _code = sys.stdin.read(1)
-                        return ""
-                if seq2 == "Z":
-                    return KEY_SHIFT_TAB
-                # Consume any remaining escape sequence chars
-                return ""
-            elif seq1 == "O":
-                seq2 = sys.stdin.read(1)
-                if seq2 == "H":
-                    return KEY_HOME
-                if seq2 == "F":
-                    return KEY_END
-                if seq2 == "Z":
-                    return KEY_SHIFT_TAB
-                return ""
-            return KEY_ESC
-
-        if ch == "\r" or ch == "\n":
-            return KEY_ENTER
-        if ch == " ":
-            return KEY_SPACE
-        if ch == "\t":
-            return KEY_TAB
-        if ch == "\x7f" or ch == "\x08":
-            return KEY_BACKSPACE
-        if ch == "\x03":
-            raise KeyboardInterrupt
-        if ch == "\x04":  # Ctrl+D
-            raise KeyboardInterrupt
-        # Ignore other control characters
-        if ord(ch) < 32:
-            return ""
-        return ch
+        data = os.read(fd, 1)
     except (OSError, IOError):
         return ""
-    finally:
+
+    if not data:
+        return ""
+
+    ch = data[0]
+
+    # ESC byte -> possible escape sequence
+    if ch == 0x1B:
+        import select as _sel
+
+        # Check if more bytes are immediately available
+        ready, _, _ = _sel.select([fd], [], [], 0.05)
+        if not ready:
+            return KEY_ESC
+
+        # Read rest of the escape sequence (up to 10 bytes, non-blocking)
         try:
-            termios.tcsetattr(fd, termios.TCSADRAIN, old)
-        except termios.error:
-            pass
+            rest = os.read(fd, 10)
+        except (OSError, IOError):
+            return KEY_ESC
+
+        if not rest:
+            return KEY_ESC
+
+        seq = rest.decode("utf-8", errors="replace")
+
+        # CSI sequences: ESC [ ...
+        if seq.startswith("["):
+            seq = seq[1:]  # strip the '['
+
+            if seq == "A":
+                return KEY_UP
+            if seq == "B":
+                return KEY_DOWN
+            if seq == "C":
+                return "right"
+            if seq == "D":
+                return "left"
+            if seq == "H":
+                return KEY_HOME
+            if seq == "F":
+                return KEY_END
+            if seq == "Z":
+                return KEY_SHIFT_TAB
+
+            # Extended: ESC [ <number> ~
+            if len(seq) == 2 and seq[1] == "~":
+                return {
+                    "1": KEY_HOME,
+                    "2": "insert",
+                    "3": "delete",
+                    "4": KEY_END,
+                    "5": KEY_PAGE_UP,
+                    "6": KEY_PAGE_DOWN,
+                }.get(seq[0], "")
+
+            # Longer extended sequences (e.g., ESC [ 1 ; 2 A for shift+arrow)
+            # Just consume and ignore
+            return ""
+
+        # SS3 sequences: ESC O ...
+        if seq.startswith("O"):
+            code = seq[1:2]
+            if code == "H":
+                return KEY_HOME
+            if code == "F":
+                return KEY_END
+            if code == "Z":
+                return KEY_SHIFT_TAB
+            return ""
+
+        return KEY_ESC
+
+    # Normal single-byte characters
+    if ch in (0x0D, 0x0A):
+        return KEY_ENTER
+    if ch == 0x20:
+        return KEY_SPACE
+    if ch == 0x09:
+        return KEY_TAB
+    if ch in (0x7F, 0x08):
+        return KEY_BACKSPACE
+    if ch == 0x03:
+        raise KeyboardInterrupt
+    if ch == 0x04:  # Ctrl+D
+        raise KeyboardInterrupt
+    # Ignore other control characters
+    if ch < 32:
+        return ""
+
+    return chr(ch)
 
 
 def _read_key_windows() -> str:
@@ -197,10 +266,6 @@ def _read_key_windows() -> str:
         raise KeyboardInterrupt
     return ch
 
-
-_read_key = (
-    _read_key_windows if platform.system() == "Windows" else _read_key_unix
-)
 
 # ---------------------------------------------------------------------------
 # Range parser  (e.g. "3-7" or "1,4-6,9")
@@ -252,10 +317,7 @@ def _parse_ranges(text: str, max_val: int) -> list[int] | None:
 
 
 def _fuzzy_match(query: str, text: str) -> bool:
-    """Return True if every character of *query* appears in *text* in order.
-
-    Case-insensitive.  An empty query matches everything.
-    """
+    """Return True if every character of *query* appears in *text* in order."""
     if not query:
         return True
     q = query.lower()
@@ -270,17 +332,27 @@ def _fuzzy_match(query: str, text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
-# Style helpers
+# Badge extraction
 # ---------------------------------------------------------------------------
 
-# Media-type badge colours.
-_BADGE_STYLES: dict[str, tuple[str, str]] = {
-    "FILM": ("bold white on blue", " FILM "),
-    "SERIE": ("bold white on magenta", " SERIE "),
-    "ANIME": ("bold white on red", " ANIME "),
-}
+_BADGE_RE = re.compile(r"^\[(FILM|SERIE|ANIME)\]\s*", re.IGNORECASE)
 
-# Minimum terminal dimensions.
+
+def _extract_badge(text: str) -> tuple[str, str | None]:
+    """Strip a ``[FILM]``/``[SERIE]``/``[ANIME]`` prefix from *text*.
+
+    Returns ``(cleaned_text, badge_type_upper)`` or ``(text, None)``.
+    """
+    m = _BADGE_RE.match(text)
+    if m:
+        return text[m.end():], m.group(1).upper()
+    return text, None
+
+
+# ---------------------------------------------------------------------------
+# Terminal size
+# ---------------------------------------------------------------------------
+
 _MIN_WIDTH = 60
 _MIN_HEIGHT = 16
 
@@ -289,6 +361,53 @@ def _term_size() -> tuple[int, int]:
     """Return (columns, lines) clamped to minimums."""
     sz = shutil.get_terminal_size((80, 24))
     return max(sz.columns, _MIN_WIDTH), max(sz.lines, _MIN_HEIGHT)
+
+
+# ---------------------------------------------------------------------------
+# Rendering helper: build strings with ANSI codes
+# ---------------------------------------------------------------------------
+
+
+def _truncate(text: str, max_width: int) -> str:
+    """Truncate text to max_width, adding ellipsis if needed.
+
+    Only counts visible characters (strips ANSI codes for length calculation).
+    """
+    # For simplicity, we do raw truncation. ANSI codes inside text might
+    # get cut, but we always append RESET after rendering lines, so the
+    # terminal will not be left in a bad state.
+    visible_len = len(_strip_ansi(text))
+    if visible_len <= max_width:
+        return text
+    # Rough truncation -- find the point where visible chars hit limit
+    count = 0
+    i = 0
+    while i < len(text) and count < max_width - 1:
+        if text[i] == "\033":
+            # Skip entire escape sequence
+            while i < len(text) and text[i] != "m":
+                i += 1
+            i += 1  # skip the 'm'
+            continue
+        count += 1
+        i += 1
+    return text[:i] + "\u2026" + RESET
+
+
+_ANSI_RE = re.compile(r"\033\[[0-9;]*m")
+
+
+def _strip_ansi(text: str) -> str:
+    """Remove ANSI escape codes from text."""
+    return _ANSI_RE.sub("", text)
+
+
+def _pad_line(text: str, width: int) -> str:
+    """Pad a line (containing ANSI codes) to fill `width` visible characters."""
+    visible_len = len(_strip_ansi(text))
+    if visible_len < width:
+        return text + " " * (width - visible_len)
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -305,7 +424,6 @@ class _ListState:
     scroll_offset: int = 0
     selected: set[int] = field(default_factory=set)
     filter_text: str = ""
-    # Indices into *items* that match the current filter.
     filtered_indices: list[int] = field(default_factory=list)
 
     def __post_init__(self) -> None:
@@ -320,7 +438,6 @@ class _ListState:
             ]
         else:
             self.filtered_indices = list(range(len(self.items)))
-        # Clamp cursor.
         if self.filtered_indices:
             self.cursor = min(self.cursor, len(self.filtered_indices) - 1)
             self.cursor = max(self.cursor, 0)
@@ -333,11 +450,9 @@ class _ListState:
         return len(self.filtered_indices)
 
     def real_index(self, filtered_pos: int) -> int:
-        """Map a position in the filtered list to the real item index."""
         return self.filtered_indices[filtered_pos]
 
     def cursor_real(self) -> int | None:
-        """Real index at cursor, or None if list empty."""
         if not self.filtered_indices:
             return None
         return self.filtered_indices[self.cursor]
@@ -378,7 +493,7 @@ class _TrackSections:
     video: _ListState
     audio: _ListState
     subtitles: _ListState
-    active_section: int = 0  # 0=video, 1=audio, 2=subtitles
+    active_section: int = 0
 
     @property
     def active(self) -> _ListState:
@@ -405,7 +520,7 @@ class InteractiveSelector:
 
     Keyboard bindings (common):
 
-    * **Up / Down**   -- move cursor
+    * **Up / Down**    -- move cursor
     * **Page Up/Down** -- scroll by page
     * **Home / End**   -- jump to first / last
     * **Enter**        -- confirm
@@ -424,13 +539,166 @@ class InteractiveSelector:
     * **Tab / Shift-Tab** -- cycle sections
     """
 
-    def __init__(self, console: Console) -> None:
+    def __init__(self, console: object = None) -> None:
+        # We accept a Console for API compatibility but do NOT use it
+        # for rendering during interactive loops.
         self._console = console
-        self._header_text: str | None = None  # Persistent header (banner)
+        self._header_text: str | None = None
 
     def set_header(self, header: str) -> None:
-        """Set a persistent header (ASCII banner) shown above every screen."""
+        """Set a persistent header shown above every screen.
+
+        Note: the header is stored but we use our own banner for rendering
+        during interactive loops (the Rich markup in header cannot be
+        rendered through raw ANSI writes).
+        """
         self._header_text = header
+
+    # =====================================================================
+    # Terminal context manager
+    # =====================================================================
+
+    def _enter_interactive(self) -> tuple[int, object | None]:
+        """Set up terminal for interactive input.
+
+        Returns (fd, old_settings) on Unix, (-1, None) on Windows.
+        The caller MUST call _exit_interactive in a finally block.
+        """
+        if _IS_WINDOWS:
+            sys.stdout.write(HIDE_CURSOR)
+            sys.stdout.flush()
+            return -1, None
+
+        import termios
+        import tty
+
+        fd = sys.stdin.fileno()
+        try:
+            old = termios.tcgetattr(fd)
+        except termios.error:
+            # Not a real terminal -- fallback
+            return fd, None
+
+        try:
+            tty.setcbreak(fd)
+        except termios.error:
+            return fd, None
+
+        sys.stdout.write(HIDE_CURSOR)
+        sys.stdout.flush()
+        return fd, old
+
+    def _exit_interactive(self, fd: int, old_settings: object | None) -> None:
+        """Restore terminal state. MUST be called in a finally block."""
+        try:
+            sys.stdout.write(SHOW_CURSOR + CLEAR_SCREEN)
+            sys.stdout.flush()
+        except (OSError, IOError):
+            pass
+
+        if old_settings is not None and not _IS_WINDOWS:
+            import termios
+            try:
+                termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+            except (termios.error, OSError):
+                pass
+
+    def _read_key(self, fd: int) -> str:
+        """Read a single keypress."""
+        if _IS_WINDOWS:
+            return _read_key_windows()
+        return _read_key_unix(fd)
+
+    # =====================================================================
+    # Rendering engine (pure ANSI, no Rich)
+    # =====================================================================
+
+    def _write_screen(self, lines: list[str]) -> None:
+        """Clear screen and write all lines at once via sys.stdout."""
+        w, h = _term_size()
+        output = CLEAR_SCREEN
+
+        for line in lines:
+            output += _truncate(line, w - 1) + RESET + "\n"
+
+        try:
+            sys.stdout.write(output)
+            sys.stdout.flush()
+        except (OSError, IOError):
+            pass
+
+    def _get_banner_lines(self) -> list[str]:
+        """Return the banner as a list of strings to display."""
+        _, h = _term_size()
+        # Use compact banner if terminal is small
+        if h < 30:
+            return BANNER_COMPACT.split("\n")
+        return BANNER.split("\n")
+
+    def _get_version_line(self) -> str:
+        """Extract version from stored header if available."""
+        if self._header_text:
+            # Try to find version pattern in header
+            m = re.search(r"v([\d.]+)", self._header_text)
+            if m:
+                return (
+                    f"  {BOLD}{FG_WHITE}v{m.group(1)}{RESET}"
+                    f"  {DIM}|  Professional media downloader{RESET}"
+                )
+        return ""
+
+    # =====================================================================
+    # Box drawing helpers
+    # =====================================================================
+
+    def _draw_box_top(self, title: str, width: int) -> str:
+        """Draw the top border of a box with title."""
+        title_clean = f" {title} "
+        inner = width - 2
+        title_len = len(title_clean)
+        left = (inner - title_len) // 2
+        right = inner - title_len - left
+        return (
+            f"{FG_CYAN}{BOLD}"
+            f"\u256d{H_LINE * left}{RESET}{BOLD}{FG_WHITE}{title_clean}"
+            f"{FG_CYAN}{BOLD}{H_LINE * right}\u256e{RESET}"
+        )
+
+    def _draw_box_bottom(self, width: int) -> str:
+        """Draw the bottom border of a box."""
+        inner = width - 2
+        return f"{FG_CYAN}{BOLD}\u2570{H_LINE * inner}\u256f{RESET}"
+
+    def _draw_box_line(self, content: str, width: int) -> str:
+        """Draw a line inside a box with side borders."""
+        inner = width - 4  # 2 for borders + 2 for padding
+        padded = _pad_line(f" {content}", inner + 1)
+        return f"{FG_CYAN}\u2502{RESET} {padded}{FG_CYAN}\u2502{RESET}"
+
+    def _draw_box_empty(self, width: int) -> str:
+        """Draw an empty line inside a box."""
+        inner = width - 2
+        return f"{FG_CYAN}\u2502{RESET}{' ' * inner}{FG_CYAN}\u2502{RESET}"
+
+    def _draw_box_separator(self, width: int) -> str:
+        """Draw a horizontal separator inside a box."""
+        inner = width - 2
+        return f"{FG_CYAN}\u251c{H_LINE * inner}\u2524{RESET}"
+
+    # =====================================================================
+    # Page size calculations
+    # =====================================================================
+
+    def _page_size(self) -> int:
+        _, h = _term_size()
+        # Reserve: banner(8) + title(2) + filter(2) + footer(3) + border(4) + padding(3)
+        overhead = 20
+        return max(3, h - overhead)
+
+    def _page_size_tracks(self) -> int:
+        _, h = _term_size()
+        per_section = (h - 22) // 3
+        return max(2, per_section)
 
     # =====================================================================
     # Public API
@@ -444,19 +712,7 @@ class InteractiveSelector:
     ) -> int | None:
         """Single-select from a list with FZF-style fuzzy filtering.
 
-        Parameters
-        ----------
-        items:
-            Display labels for each option.
-        title:
-            Header text shown above the list.
-        show_type_badge:
-            If ``True``, attempt to parse ``[FILM]``/``[SERIE]``/``[ANIME]``
-            prefixes from item strings and render coloured badges.
-
-        Returns
-        -------
-        The selected index, or ``None`` if cancelled.
+        Returns the selected index, or ``None`` if cancelled.
         """
         if not items:
             return None
@@ -464,10 +720,11 @@ class InteractiveSelector:
         state = _ListState(items=list(items))
         page = self._page_size()
 
+        fd, old = self._enter_interactive()
         try:
             while True:
                 self._render_list(state, title, page, multi=False, badge=show_type_badge)
-                key = _read_key()
+                key = self._read_key(fd)
 
                 if key == KEY_UP:
                     state.move_cursor(-1, page)
@@ -482,28 +739,28 @@ class InteractiveSelector:
                 elif key == KEY_END:
                     state.move_cursor(len(state.filtered_indices), page)
                 elif key == KEY_ENTER:
-                    self._clear()
                     return state.cursor_real()
                 elif key == KEY_ESC:
                     if state.filter_text:
                         state.filter_text = ""
                         state.refilter()
                     else:
-                        self._clear()
                         return None
                 elif key == KEY_BACKSPACE:
                     if state.filter_text:
                         state.filter_text = state.filter_text[:-1]
                         state.refilter()
                 elif key == KEY_Q and not state.filter_text:
-                    self._clear()
                     return None
                 elif len(key) == 1 and key.isprintable():
                     state.filter_text += key
                     state.refilter()
-        except KeyboardInterrupt:
-            self._clear()
+        except (KeyboardInterrupt, EOFError):
             return None
+        except Exception:
+            return None
+        finally:
+            self._exit_interactive(fd, old)
 
     def select_episodes(
         self,
@@ -512,17 +769,16 @@ class InteractiveSelector:
     ) -> list[Episode] | None:
         """Multi-select episodes with fuzzy filter and range support.
 
-        Returns a list of selected :class:`Episode` objects or ``None``
-        if cancelled.
+        Returns a list of selected :class:`Episode` objects or ``None``.
         """
         if not episodes:
-            self._console.print("[dim]No episodes available.[/dim]")
             return None
 
         labels = [f"E{ep.number:02d}  {ep.title}" for ep in episodes]
         state = _ListState(items=labels)
         page = self._page_size()
 
+        fd, old = self._enter_interactive()
         try:
             while True:
                 self._render_list(
@@ -532,7 +788,7 @@ class InteractiveSelector:
                     multi=True,
                     show_count=True,
                 )
-                key = _read_key()
+                key = self._read_key(fd)
 
                 if key == KEY_UP:
                     state.move_cursor(-1, page)
@@ -553,7 +809,6 @@ class InteractiveSelector:
                 elif key == KEY_N and not state.filter_text:
                     state.deselect_all()
                 elif key == KEY_ENTER:
-                    self._clear()
                     if not state.selected:
                         return None
                     indices = sorted(state.selected)
@@ -563,26 +818,26 @@ class InteractiveSelector:
                         state.filter_text = ""
                         state.refilter()
                     else:
-                        self._clear()
                         return None
                 elif key == KEY_BACKSPACE:
                     if state.filter_text:
                         state.filter_text = state.filter_text[:-1]
                         state.refilter()
                 elif key == KEY_Q and not state.filter_text:
-                    self._clear()
                     return None
                 elif len(key) == 1 and key.isprintable():
                     state.filter_text += key
                     state.refilter()
-                    # Check if the accumulated filter looks like a range.
                     if _RANGE_RE.match(state.filter_text):
                         parsed = _parse_ranges(state.filter_text, len(episodes))
                         if parsed is not None:
                             state.selected = set(parsed)
-        except KeyboardInterrupt:
-            self._clear()
+        except (KeyboardInterrupt, EOFError):
             return None
+        except Exception:
+            return None
+        finally:
+            self._exit_interactive(fd, old)
 
     def select_tracks(
         self,
@@ -590,19 +845,12 @@ class InteractiveSelector:
         preferred_audio: str = "",
         preferred_subtitle: str = "",
     ) -> SelectedTracks | None:
-        """All-in-one track selection on a single screen.
+        """All-in-one track selection.
 
         Shows three sections -- Video, Audio, Subtitles -- with Tab to
-        navigate between them.  Video is single-select; Audio and
-        Subtitles are multi-select.
-
-        Returns a :class:`SelectedTracks` or ``None`` on cancel.
+        navigate between them.  Returns :class:`SelectedTracks` or ``None``.
         """
-        # -- Build labels and pre-selections --------------------------------
         if not bundle.video:
-            self._console.print(
-                "[bold red]Error:[/bold red] No video tracks available."
-            )
             return None
 
         video_labels = [t.label for t in bundle.video]
@@ -610,7 +858,7 @@ class InteractiveSelector:
         sub_labels = [t.label for t in bundle.subtitles]
 
         video_state = _ListState(items=video_labels)
-        video_state.selected = {0}  # Default to first (best) quality.
+        video_state.selected = {0}
 
         audio_state = _ListState(items=audio_labels)
         audio_pre = self._preselect_by_language(bundle.audio, preferred_audio)
@@ -628,10 +876,11 @@ class InteractiveSelector:
 
         page = self._page_size_tracks()
 
+        fd, old = self._enter_interactive()
         try:
             while True:
                 self._render_tracks(sections, bundle, page)
-                key = _read_key()
+                key = self._read_key(fd)
 
                 active = sections.active
 
@@ -653,7 +902,6 @@ class InteractiveSelector:
                     active.move_cursor(len(active.filtered_indices), page)
                 elif key == KEY_SPACE:
                     if sections.active_section == 0:
-                        # Video: single-select.
                         ri = active.cursor_real()
                         if ri is not None:
                             active.selected = {ri}
@@ -666,32 +914,19 @@ class InteractiveSelector:
                     if sections.active_section != 0:
                         active.deselect_all()
                 elif key == KEY_ENTER:
-                    self._clear()
                     return self._build_selected_tracks(sections, bundle)
                 elif key in (KEY_ESC, KEY_Q):
-                    self._clear()
                     return None
-        except KeyboardInterrupt:
-            self._clear()
+        except (KeyboardInterrupt, EOFError):
             return None
+        except Exception:
+            return None
+        finally:
+            self._exit_interactive(fd, old)
 
     # =====================================================================
     # Rendering -- single / multi list
     # =====================================================================
-
-    def _page_size(self) -> int:
-        """Calculate how many items fit on screen for a list selector."""
-        _, h = _term_size()
-        # Reserve: banner(8) + title(2) + filter(1) + footer(3) + padding(4) + border(2)
-        header_lines = 8 if self._header_text else 0
-        return max(3, h - 12 - header_lines)
-
-    def _page_size_tracks(self) -> int:
-        """Items per section in the track selector."""
-        _, h = _term_size()
-        # Three sections share vertical space; each needs header lines too.
-        per_section = (h - 14) // 3
-        return max(2, per_section)
 
     def _render_list(
         self,
@@ -703,136 +938,131 @@ class InteractiveSelector:
         badge: bool = False,
         show_count: bool = False,
     ) -> None:
-        """Render a scrollable, filterable list inside a rich Panel."""
+        """Render a scrollable, filterable list with ANSI codes."""
         w, _ = _term_size()
-        lines: list[Text] = []
+        box_width = min(w, 100)
+        out: list[str] = []
 
-        # -- Filter bar -----------------------------------------------------
+        # -- Banner --
+        for bline in self._get_banner_lines():
+            out.append(bline)
+        vline = self._get_version_line()
+        if vline:
+            out.append(vline)
+        out.append("")
+
+        # -- Box top --
+        out.append(self._draw_box_top(title, box_width))
+        out.append(self._draw_box_empty(box_width))
+
+        # -- Filter bar --
         if state.filter_text:
-            ft = Text()
-            ft.append("  / ", style="bold cyan")
-            ft.append(state.filter_text, style="bold white")
-            ft.append("_", style="blink bold cyan")
-            ft.append(
-                f"  ({state.visible_count} match{'es' if state.visible_count != 1 else ''})",
-                style="dim",
+            match_word = "matches" if state.visible_count != 1 else "match"
+            filter_line = (
+                f"  {BOLD}{FG_CYAN}/{RESET} "
+                f"{BOLD}{FG_WHITE}{state.filter_text}{RESET}"
+                f"{BLINK}{BOLD}{FG_CYAN}_{RESET}"
+                f"  {DIM}({state.visible_count} {match_word}){RESET}"
             )
-            lines.append(ft)
-            lines.append(Text())
+            out.append(self._draw_box_line(filter_line, box_width))
+            out.append(self._draw_box_empty(box_width))
 
         visible = state.filtered_indices
         total = len(visible)
 
-        # Ensure scroll offset is valid.
         state._fix_scroll(page)
-
         start = state.scroll_offset
         end = min(start + page, total)
 
-        # -- Scroll-up indicator -------------------------------------------
+        # -- Scroll up indicator --
         if start > 0:
-            up_text = Text(f"  {_UP_ARROW} {start} more above", style="dim cyan")
-            lines.append(up_text)
+            up_line = f"  {DIM}{FG_CYAN}{UP_ARROW} {start} more above{RESET}"
+            out.append(self._draw_box_line(up_line, box_width))
 
-        # -- Items ---------------------------------------------------------
+        # -- Items --
         for vi in range(start, end):
             real_idx = visible[vi]
             is_cursor = vi == state.cursor
             is_selected = real_idx in state.selected
             raw_label = state.items[real_idx]
 
-            line = Text()
+            line = ""
 
             # Cursor arrow
             if is_cursor:
-                line.append(" > ", style="bold cyan")
+                line += f" {BOLD}{FG_CYAN}>{RESET} "
             else:
-                line.append("   ")
+                line += "   "
 
             # Checkbox / radio
             if multi:
                 if is_selected:
-                    line.append("[x]", style="bold cyan")
+                    line += f"{BOLD}{FG_CYAN}[x]{RESET}"
                 else:
-                    line.append("[ ]", style="dim")
+                    line += f"{DIM}[ ]{RESET}"
             else:
                 if is_selected or is_cursor:
-                    line.append("(*)", style="bold cyan")
+                    line += f"{BOLD}{FG_CYAN}(*){RESET}"
                 else:
-                    line.append("( )", style="dim")
+                    line += f"{DIM}( ){RESET}"
 
-            line.append(" ")
+            line += " "
 
             # Number
-            line.append(f"{real_idx + 1:>3}. ", style="dim")
+            line += f"{DIM}{real_idx + 1:>3}. {RESET}"
 
             # Badge extraction
             if badge:
                 label_text, badge_type = _extract_badge(raw_label)
-                if badge_type and badge_type in _BADGE_STYLES:
-                    style, badge_text = _BADGE_STYLES[badge_type]
-                    line.append(badge_text, style=style)
-                    line.append(" ")
-                line.append(label_text, style="bold" if is_cursor else "")
+                if badge_type and badge_type in _BADGE_COLORS:
+                    bg, fg = _BADGE_COLORS[badge_type]
+                    line += f"{bg}{fg}{BOLD} {badge_type} {RESET} "
+                style = f"{BOLD}{FG_WHITE}" if is_cursor else ""
+                line += f"{style}{label_text}{RESET}"
             else:
-                line.append(raw_label, style="bold" if is_cursor else "")
+                style = f"{BOLD}{FG_WHITE}" if is_cursor else ""
+                line += f"{style}{raw_label}{RESET}"
 
-            lines.append(line)
+            out.append(self._draw_box_line(line, box_width))
 
-        # -- Scroll-down indicator -----------------------------------------
+        # -- No results --
+        if total == 0:
+            no_results = f"  {DIM}No matches found{RESET}"
+            out.append(self._draw_box_line(no_results, box_width))
+
+        # -- Scroll down indicator --
         remaining_below = total - end
         if remaining_below > 0:
-            dn_text = Text(
-                f"  {_DOWN_ARROW} {remaining_below} more below",
-                style="dim cyan",
-            )
-            lines.append(dn_text)
+            dn_line = f"  {DIM}{FG_CYAN}{DOWN_ARROW} {remaining_below} more below{RESET}"
+            out.append(self._draw_box_line(dn_line, box_width))
 
-        # -- Footer --------------------------------------------------------
-        lines.append(Text())
+        out.append(self._draw_box_empty(box_width))
 
+        # -- Selected count --
         if show_count and multi:
-            count_line = Text()
-            count_line.append(
-                f"  {len(state.selected)} selected", style="bold cyan"
-            )
-            lines.append(count_line)
+            count_line = f"  {BOLD}{FG_CYAN}{len(state.selected)} selected{RESET}"
+            out.append(self._draw_box_line(count_line, box_width))
 
-        footer = self._build_footer(multi)
-        lines.append(footer)
+        # -- Footer --
+        footer = self._build_footer_str(multi)
+        out.append(self._draw_box_line(footer, box_width))
+        out.append(self._draw_box_empty(box_width))
 
-        # -- Assemble panel ------------------------------------------------
-        content = Text("\n").join(lines)
+        # -- Box bottom --
+        out.append(self._draw_box_bottom(box_width))
 
-        panel = Panel(
-            content,
-            title=f"[bold]{title}[/bold]",
-            border_style="cyan",
-            padding=(1, 2),
-            width=min(w, 100),
-        )
-
-        self._console.clear()
-        if self._header_text:
-            self._console.print(self._header_text, highlight=False)
-        self._console.print(panel)
+        self._write_screen(out)
 
     @staticmethod
-    def _build_footer(multi: bool) -> Text:
-        foot = Text("  ")
+    def _build_footer_str(multi: bool) -> str:
+        foot = "  "
         if multi:
-            foot.append("Space", style="bold")
-            foot.append(" toggle  ", style="dim")
-            foot.append("a", style="bold")
-            foot.append(" all  ", style="dim")
-            foot.append("n", style="bold")
-            foot.append(" none  ", style="dim")
-        foot.append("Enter", style="bold")
-        foot.append(" confirm  ", style="dim")
-        foot.append("Esc", style="bold")
-        foot.append(" back  ", style="dim")
-        foot.append("/", style="bold")
-        foot.append(" filter", style="dim")
+            foot += f"{BOLD}Space{RESET}{DIM} toggle  {RESET}"
+            foot += f"{BOLD}a{RESET}{DIM} all  {RESET}"
+            foot += f"{BOLD}n{RESET}{DIM} none  {RESET}"
+        foot += f"{BOLD}Enter{RESET}{DIM} confirm  {RESET}"
+        foot += f"{BOLD}Esc{RESET}{DIM} back  {RESET}"
+        foot += f"{BOLD}/{RESET}{DIM} filter{RESET}"
         return foot
 
     # =====================================================================
@@ -845,9 +1075,22 @@ class InteractiveSelector:
         bundle: StreamBundle,
         page: int,
     ) -> None:
-        """Render the all-in-one track selector."""
+        """Render the all-in-one track selector with ANSI codes."""
         w, _ = _term_size()
-        lines: list[Text] = []
+        box_width = min(w, 110)
+        out: list[str] = []
+
+        # -- Banner --
+        for bline in self._get_banner_lines():
+            out.append(bline)
+        vline = self._get_version_line()
+        if vline:
+            out.append(vline)
+        out.append("")
+
+        # -- Box top --
+        out.append(self._draw_box_top("Track Selection", box_width))
+        out.append(self._draw_box_empty(box_width))
 
         section_defs: list[tuple[str, _ListState, bool, str | None]] = [
             ("VIDEO", sections.video, False, self._video_warning(bundle)),
@@ -859,47 +1102,47 @@ class InteractiveSelector:
             is_active = idx == sections.active_section
 
             # Section header
-            header = Text()
             if is_active:
-                header.append(f"  {_RIGHT_ARROW} ", style="bold cyan")
-                header.append(label, style="bold cyan underline")
+                header = (
+                    f"  {BOLD}{FG_CYAN}{RIGHT_ARROW} {UNDERLINE}{label}{RESET}"
+                )
             else:
-                header.append("    ", style="dim")
-                header.append(label, style="dim bold")
+                header = f"    {DIM}{BOLD}{label}{RESET}"
 
-            # Selected count
+            # Selected count/info
             if multi:
                 count = len(st.selected)
-                header.append(f"  ({count} selected)", style="dim cyan" if count else "dim")
+                if count:
+                    header += f"  {DIM}{FG_CYAN}({count} selected){RESET}"
+                else:
+                    header += f"  {DIM}(0 selected){RESET}"
             else:
                 if st.selected:
                     sel_idx = min(st.selected)
                     if sel_idx < len(st.items):
-                        header.append(f"  = {st.items[sel_idx]}", style="dim cyan")
+                        header += f"  {DIM}{FG_CYAN}= {st.items[sel_idx]}{RESET}"
 
-            lines.append(header)
+            out.append(self._draw_box_line(header, box_width))
 
-            # Warning messages
+            # Warning
             if warning:
-                warn_line = Text(f"    {warning}")
-                lines.append(warn_line)
+                out.append(self._draw_box_line(f"    {FG_YELLOW}{warning}{RESET}", box_width))
 
-            # Items in this section
+            # Items
             visible = st.filtered_indices
             total = len(visible)
 
             if total == 0:
-                empty_line = Text("      (none)", style="dim")
-                lines.append(empty_line)
+                out.append(self._draw_box_line(f"      {DIM}(none){RESET}", box_width))
             else:
                 st._fix_scroll(page)
                 start = st.scroll_offset
                 end = min(start + page, total)
 
                 if start > 0:
-                    lines.append(
-                        Text(f"      {_UP_ARROW} {start} more", style="dim cyan")
-                    )
+                    out.append(self._draw_box_line(
+                        f"      {DIM}{FG_CYAN}{UP_ARROW} {start} more{RESET}", box_width
+                    ))
 
                 for vi in range(start, end):
                     real_idx = visible[vi]
@@ -907,105 +1150,93 @@ class InteractiveSelector:
                     is_selected = real_idx in st.selected
                     raw_label = st.items[real_idx]
 
-                    line = Text()
+                    line = ""
                     if is_cursor:
-                        line.append("    > ", style="bold cyan")
+                        line += f"    {BOLD}{FG_CYAN}> {RESET}"
                     else:
-                        line.append("      ")
+                        line += "      "
 
                     if multi:
                         if is_selected:
-                            line.append("[x]", style="bold cyan")
+                            line += f"{BOLD}{FG_CYAN}[x]{RESET}"
                         else:
-                            line.append("[ ]", style="dim")
+                            line += f"{DIM}[ ]{RESET}"
                     else:
                         if is_selected:
-                            line.append("(*)", style="bold cyan")
+                            line += f"{BOLD}{FG_CYAN}(*){RESET}"
                         elif is_cursor:
-                            line.append("( )", style="cyan")
+                            line += f"{FG_CYAN}( ){RESET}"
                         else:
-                            line.append("( )", style="dim")
+                            line += f"{DIM}( ){RESET}"
 
-                    line.append(" ")
-                    line.append(
-                        raw_label, style="bold" if is_cursor else ""
-                    )
-                    lines.append(line)
+                    line += " "
+                    style = f"{BOLD}" if is_cursor else ""
+                    line += f"{style}{raw_label}{RESET}"
+
+                    out.append(self._draw_box_line(line, box_width))
 
                 remaining = total - end
                 if remaining > 0:
-                    lines.append(
-                        Text(
-                            f"      {_DOWN_ARROW} {remaining} more",
-                            style="dim cyan",
-                        )
-                    )
+                    out.append(self._draw_box_line(
+                        f"      {DIM}{FG_CYAN}{DOWN_ARROW} {remaining} more{RESET}", box_width
+                    ))
 
-            # Spacer between sections (except last).
+            # Spacer between sections
             if idx < len(section_defs) - 1:
-                lines.append(Text())
+                out.append(self._draw_box_empty(box_width))
 
-        # -- Summary panel -------------------------------------------------
-        lines.append(Text())
-        lines.append(Text("  " + _H_LINE * 40, style="dim"))
-        lines.append(Text())
+        # -- Summary --
+        out.append(self._draw_box_empty(box_width))
+        out.append(self._draw_box_line(
+            f"  {DIM}{FG_CYAN}{H_LINE * 40}{RESET}", box_width
+        ))
+        out.append(self._draw_box_empty(box_width))
 
-        summary = Text("  Selection: ", style="bold")
+        summary = f"  {BOLD}Selection:{RESET} "
+
         # Video
         if sections.video.selected:
             v_idx = min(sections.video.selected)
             if v_idx < len(bundle.video):
-                summary.append(bundle.video[v_idx].label, style="cyan")
+                summary += f"{FG_CYAN}{bundle.video[v_idx].label}{RESET}"
         else:
-            summary.append("(none)", style="dim red")
+            summary += f"{DIM}{FG_RED}(none){RESET}"
 
-        summary.append("  |  ", style="dim")
+        summary += f"  {DIM}|{RESET}  "
 
         # Audio
         a_count = len(sections.audio.selected)
         if a_count:
-            summary.append(f"{a_count} audio", style="cyan")
+            summary += f"{FG_CYAN}{a_count} audio{RESET}"
         else:
-            summary.append("0 audio", style="dim")
+            summary += f"{DIM}0 audio{RESET}"
 
-        summary.append("  |  ", style="dim")
+        summary += f"  {DIM}|{RESET}  "
 
         # Subtitles
         s_count = len(sections.subtitles.selected)
         if s_count:
-            summary.append(f"{s_count} subs", style="cyan")
+            summary += f"{FG_CYAN}{s_count} subs{RESET}"
         else:
-            summary.append("0 subs", style="dim")
+            summary += f"{DIM}0 subs{RESET}"
 
-        lines.append(summary)
+        out.append(self._draw_box_line(summary, box_width))
 
-        # -- Footer --------------------------------------------------------
-        lines.append(Text())
-        foot = Text("  ")
-        foot.append("Tab", style="bold")
-        foot.append(" section  ", style="dim")
-        foot.append("Space", style="bold")
-        foot.append(" toggle  ", style="dim")
-        foot.append("Enter", style="bold")
-        foot.append(" confirm  ", style="dim")
-        foot.append("Esc", style="bold")
-        foot.append(" cancel", style="dim")
-        lines.append(foot)
-
-        content = Text("\n").join(lines)
-
-        panel = Panel(
-            content,
-            title="[bold]Track Selection[/bold]",
-            border_style="cyan",
-            padding=(1, 2),
-            width=min(w, 110),
+        # -- Footer --
+        out.append(self._draw_box_empty(box_width))
+        foot = (
+            f"  {BOLD}Tab{RESET}{DIM} section  {RESET}"
+            f"{BOLD}Space{RESET}{DIM} toggle  {RESET}"
+            f"{BOLD}Enter{RESET}{DIM} confirm  {RESET}"
+            f"{BOLD}Esc{RESET}{DIM} cancel{RESET}"
         )
+        out.append(self._draw_box_line(foot, box_width))
+        out.append(self._draw_box_empty(box_width))
 
-        self._console.clear()
-        if self._header_text:
-            self._console.print(self._header_text, highlight=False)
-        self._console.print(panel)
+        # -- Box bottom --
+        out.append(self._draw_box_bottom(box_width))
+
+        self._write_screen(out)
 
     # =====================================================================
     # Warnings
@@ -1014,19 +1245,19 @@ class InteractiveSelector:
     @staticmethod
     def _video_warning(bundle: StreamBundle) -> str | None:
         if not bundle.video:
-            return "[bold red]ERROR: No video tracks available![/bold red]"
+            return "ERROR: No video tracks available!"
         return None
 
     @staticmethod
     def _audio_warning(bundle: StreamBundle) -> str | None:
         if not bundle.audio:
-            return "[yellow]Warning: No audio tracks. Video will have no sound.[/yellow]"
+            return "Warning: No audio tracks. Video will have no sound."
         return None
 
     @staticmethod
     def _subtitle_warning(bundle: StreamBundle) -> str | None:
         if not bundle.subtitles:
-            return "[dim]No subtitle tracks available.[/dim]"
+            return "No subtitle tracks available."
         return None
 
     # =====================================================================
@@ -1037,14 +1268,10 @@ class InteractiveSelector:
     def _build_selected_tracks(
         sections: _TrackSections, bundle: StreamBundle
     ) -> SelectedTracks:
-        """Construct :class:`SelectedTracks` from the section states."""
-        # Video (single-select, must have at least one)
         v_idx = min(sections.video.selected) if sections.video.selected else 0
         video = bundle.video[v_idx]
-
         audio = [bundle.audio[i] for i in sorted(sections.audio.selected)]
         subs = [bundle.subtitles[i] for i in sorted(sections.subtitles.selected)]
-
         return SelectedTracks(video=video, audio=audio, subtitles=subs)
 
     # =====================================================================
@@ -1065,50 +1292,3 @@ class InteractiveSelector:
             for i, t in enumerate(tracks)
             if t.language.lower() == preferred_lower
         ]
-
-    def _clear(self) -> None:
-        """Clear the selector display."""
-        self._console.clear()
-
-
-# ---------------------------------------------------------------------------
-# Badge extraction
-# ---------------------------------------------------------------------------
-
-_BADGE_RE = re.compile(r"^\[(FILM|SERIE|ANIME)\]\s*", re.IGNORECASE)
-
-
-def _extract_badge(text: str) -> tuple[str, str | None]:
-    """Strip a ``[FILM]``/``[SERIE]``/``[ANIME]`` prefix from *text*.
-
-    Returns ``(cleaned_text, badge_type_upper)`` or ``(text, None)`` if
-    no badge is found.
-    """
-    m = _BADGE_RE.match(text)
-    if m:
-        return text[m.end() :], m.group(1).upper()
-    return text, None
-
-
-# ---------------------------------------------------------------------------
-# Unicode glyphs (with ASCII fallback for Windows legacy consoles)
-# ---------------------------------------------------------------------------
-
-if platform.system() == "Windows":
-    try:
-        # Check if the console supports Unicode.
-        "".encode(sys.stdout.encoding or "utf-8")
-        _UP_ARROW = "\u25b2"
-        _DOWN_ARROW = "\u25bc"
-        _RIGHT_ARROW = "\u25b6"
-        _H_LINE = "\u2500"
-    except (UnicodeEncodeError, LookupError):
-        _UP_ARROW = "^"
-        _DOWN_ARROW = "v"
-        _RIGHT_ARROW = ">"
-        _H_LINE = "-"
-else:
-    _UP_ARROW = "\u25b2"
-    _DOWN_ARROW = "\u25bc"
-    _RIGHT_ARROW = "\u25b6"
-    _H_LINE = "\u2500"
