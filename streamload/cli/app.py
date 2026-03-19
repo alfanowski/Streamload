@@ -291,13 +291,19 @@ class StreamloadApp:
         if config.auto_update:
             self._check_for_updates()
 
-        # 9. Banner
+        # 9. Banner - set as persistent header for the selector
         self._prompts.show_banner(__version__)
         svc_count = len(self._services)
         self._prompts.show_info(
             self._i18n.t("system.startup", version=__version__)
             + f"  ({svc_count} service{'s' if svc_count != 1 else ''} loaded)"
         )
+
+        # Set banner as persistent header for selector screens
+        from streamload.cli.ui.prompts import _BANNER_LINES
+        banner_str = "[bold cyan]" + "\n".join(_BANNER_LINES) + "[/bold cyan]"
+        banner_str += f"\n  [bold white]v{__version__}[/bold white]  [dim]|  Professional media downloader[/dim]\n"
+        self._selector.set_header(banner_str)
 
     def _check_system_deps(self) -> None:
         """Verify FFmpeg / FFprobe are installed."""

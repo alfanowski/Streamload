@@ -71,13 +71,25 @@ def _read_key_unix() -> str:
     import tty
 
     fd = sys.stdin.fileno()
-    old = termios.tcgetattr(fd)
+    try:
+        old = termios.tcgetattr(fd)
+    except termios.error:
+        # Fallback for non-standard terminals
+        return sys.stdin.read(1) or ""
     try:
         tty.setraw(fd)
         ch = sys.stdin.read(1)
+        if not ch:
+            return ""
 
         if ch == "\x1b":
-            seq1 = sys.stdin.read(1)
+            # Check if more data is available (avoid blocking on bare Esc)
+            import select
+            if select.select([sys.stdin], [], [], 0.05)[0]:
+                seq1 = sys.stdin.read(1)
+            else:
+                return KEY_ESC
+
             if seq1 == "[":
                 seq2 = sys.stdin.read(1)
                 # Arrow keys
@@ -113,6 +125,8 @@ def _read_key_unix() -> str:
                         return ""
                 if seq2 == "Z":
                     return KEY_SHIFT_TAB
+                # Consume any remaining escape sequence chars
+                return ""
             elif seq1 == "O":
                 seq2 = sys.stdin.read(1)
                 if seq2 == "H":
@@ -121,6 +135,7 @@ def _read_key_unix() -> str:
                     return KEY_END
                 if seq2 == "Z":
                     return KEY_SHIFT_TAB
+                return ""
             return KEY_ESC
 
         if ch == "\r" or ch == "\n":
@@ -133,9 +148,19 @@ def _read_key_unix() -> str:
             return KEY_BACKSPACE
         if ch == "\x03":
             raise KeyboardInterrupt
+        if ch == "\x04":  # Ctrl+D
+            raise KeyboardInterrupt
+        # Ignore other control characters
+        if ord(ch) < 32:
+            return ""
         return ch
+    except (OSError, IOError):
+        return ""
     finally:
-        termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        try:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old)
+        except termios.error:
+            pass
 
 
 def _read_key_windows() -> str:
@@ -401,6 +426,11 @@ class InteractiveSelector:
 
     def __init__(self, console: Console) -> None:
         self._console = console
+        self._header_text: str | None = None  # Persistent header (banner)
+
+    def set_header(self, header: str) -> None:
+        """Set a persistent header (ASCII banner) shown above every screen."""
+        self._header_text = header
 
     # =====================================================================
     # Public API
@@ -652,8 +682,9 @@ class InteractiveSelector:
     def _page_size(self) -> int:
         """Calculate how many items fit on screen for a list selector."""
         _, h = _term_size()
-        # Reserve: title(2) + filter(1) + footer(3) + padding(4) + border(2)
-        return max(3, h - 12)
+        # Reserve: banner(8) + title(2) + filter(1) + footer(3) + padding(4) + border(2)
+        header_lines = 8 if self._header_text else 0
+        return max(3, h - 12 - header_lines)
 
     def _page_size_tracks(self) -> int:
         """Items per section in the track selector."""
@@ -782,6 +813,8 @@ class InteractiveSelector:
         )
 
         self._console.clear()
+        if self._header_text:
+            self._console.print(self._header_text, highlight=False)
         self._console.print(panel)
 
     @staticmethod
@@ -970,6 +1003,8 @@ class InteractiveSelector:
         )
 
         self._console.clear()
+        if self._header_text:
+            self._console.print(self._header_text, highlight=False)
         self._console.print(panel)
 
     # =====================================================================
