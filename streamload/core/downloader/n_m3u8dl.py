@@ -679,11 +679,11 @@ class N_m3u8dlDownloader:
             "--save-dir", str(output_dir),
             "--tmp-dir", str(tmp_dir),
             "--ffmpeg-binary-path", self._ffmpeg,
-            "--binary-merge",
             "--del-after-done",
             "--auto-subtitle-fix", "false",
             "--check-segments-count", "false",
             "--mux-after-done", "format=mkv",
+            "--mp4-real-time-decryption", "false",
             "--no-log",
         ]
 
