@@ -465,13 +465,15 @@ class InteractiveSelector:
         self._has_colors: bool = False
         # Loading state
         self._loading: bool = False
+        self._loading_thread: threading.Thread | None = None
+        # Breadcrumb path
+        self._breadcrumb: list[str] = []
 
     def _t(self, key: str, **kwargs) -> str:
         """Translate a string key via i18n, with fallback to the key itself."""
         if self._i18n and hasattr(self._i18n, 't'):
             return self._i18n.t(key, **kwargs)
         return key
-        self._loading_thread: threading.Thread | None = None
 
     def set_header(self, header: str) -> None:
         """Set a persistent header (no-op -- banner is built-in)."""
@@ -480,6 +482,10 @@ class InteractiveSelector:
     def set_version(self, version: str) -> None:
         """Set version string for the banner."""
         self._version = version
+
+    def set_breadcrumb(self, path: list[str]) -> None:
+        """Set the breadcrumb navigation path to display below the banner."""
+        self._breadcrumb = list(path)
 
     # =====================================================================
     # Text input within curses
@@ -632,12 +638,12 @@ class InteractiveSelector:
         self._enter_interactive()
 
         def _spin() -> None:
-            frames = ["   ", ".  ", ".. ", "...", " ..", "  .", "   "]
+            frames = ["\u280b", "\u2819", "\u2839", "\u2838", "\u283c", "\u2834", "\u2826", "\u2827", "\u2807", "\u280f"]
             idx = 0
             while self._loading:
                 self._render_loading(message, title, frames[idx % len(frames)])
                 idx += 1
-                time.sleep(0.3)
+                time.sleep(0.08)
 
         self._loading_thread = threading.Thread(target=_spin, daemon=True)
         self._loading_thread.start()
@@ -655,6 +661,120 @@ class InteractiveSelector:
             self._loading_thread = None
         if self._stdscr is not None or _IS_WINDOWS:
             self._exit_interactive()
+
+    def show_info_panel(
+        self,
+        info_lines: list[tuple[str, str]],
+        title: str = "",
+    ) -> None:
+        """Show an informational panel with key-value pairs.
+
+        Waits for the user to press Enter before returning.
+
+        ``info_lines`` is a list of (label, value) tuples.
+        """
+        if _IS_WINDOWS:
+            self._show_info_panel_ansi(info_lines, title)
+            return
+
+        self._enter_interactive()
+        try:
+            while True:
+                self._render_info_panel(info_lines, title)
+                key = self._read_key()
+                if key in (KEY_ENTER, KEY_ESC, KEY_Q):
+                    break
+        except (KeyboardInterrupt, EOFError):
+            pass
+        finally:
+            self._exit_interactive()
+
+    def _render_info_panel(
+        self, info_lines: list[tuple[str, str]], title: str
+    ) -> None:
+        """Render the info panel using curses."""
+        import curses
+
+        stdscr = self._stdscr
+        if stdscr is None:
+            return
+
+        stdscr.erase()
+        w, h = self._get_screen_size()
+        box_width = min(w - 2, 70)
+        box_x = max((w - box_width) // 2, 0)
+
+        y = 0
+
+        # Banner
+        y = self._draw_banner(y, w)
+        y += 1
+
+        # Box top
+        y = self._draw_box_top(y, box_x, box_width, title or "Info")
+        y = self._draw_box_empty(y, box_x, box_width)
+
+        # Key-value rows
+        max_label = max((len(label) for label, _ in info_lines), default=0)
+        for label, value in info_lines:
+            segments: list[tuple[str, int]] = [
+                ("  ", self._attr_normal()),
+                (f"{label:<{max_label + 1}}", self._attr_dim()),
+                (" ", self._attr_normal()),
+                (value, self._attr_white_bold()),
+            ]
+            y = self._draw_box_line_raw(y, box_x, box_width, segments)
+
+        y = self._draw_box_empty(y, box_x, box_width)
+
+        # Footer
+        footer_segments: list[tuple[str, int]] = [
+            ("  ", self._attr_normal()),
+            ("Enter", self._attr_white_bold()),
+            (f" {self._t('info.continue')}", self._attr_dim()),
+        ]
+        y = self._draw_box_line_raw(y, box_x, box_width, footer_segments)
+        y = self._draw_box_empty(y, box_x, box_width)
+
+        # Box bottom
+        y = self._draw_box_bottom(y, box_x, box_width)
+
+        stdscr.refresh()
+
+    def _show_info_panel_ansi(
+        self, info_lines: list[tuple[str, str]], title: str
+    ) -> None:
+        """Render info panel using ANSI codes (Windows fallback)."""
+        sz = shutil.get_terminal_size((80, 24))
+        w = max(sz.columns, 60)
+
+        out: list[str] = [_CLEAR_SCREEN]
+        for line in BANNER_LINES_COMPACT:
+            pad = (w - len(line)) // 2
+            out.append(f"{_BOLD}{_FG_CYAN}{' ' * max(pad, 0)}{line}{_RESET}")
+        out.append("")
+        out.append(f"  {_BOLD}{_FG_CYAN}{title or 'Info'}{_RESET}")
+        out.append(f"  {_FG_CYAN}{H_LINE * min(w - 4, 60)}{_RESET}")
+        out.append("")
+
+        max_label = max((len(label) for label, _ in info_lines), default=0)
+        for label, value in info_lines:
+            out.append(f"  {_DIM}{label:<{max_label + 1}}{_RESET} {_BOLD}{value}{_RESET}")
+
+        out.append("")
+        out.append(f"  {_BOLD}Enter{_RESET}{_DIM} continue{_RESET}")
+
+        try:
+            sys.stdout.write("\n".join(out) + "\n")
+            sys.stdout.flush()
+        except (OSError, IOError):
+            pass
+
+        # Wait for Enter
+        while True:
+            key = _read_key_windows()
+            if key in (KEY_ENTER, KEY_ESC):
+                break
 
     def _render_loading(self, message: str, title: str, spinner: str) -> None:
         """Render the loading spinner screen inside curses."""
@@ -1376,7 +1496,38 @@ class InteractiveSelector:
         ver_pad = (width - len(ver_text)) // 2
         self._safe_addstr(y, max(ver_pad, 0), ver_text, self._attr_dim())
         y += 1
+
+        # Breadcrumb
+        y = self._draw_breadcrumb(y, width)
+
         return y
+
+    def _draw_breadcrumb(self, y: int, width: int) -> int:
+        """Draw the breadcrumb path below the banner. Returns next row."""
+        if not self._breadcrumb:
+            return y
+
+        # Build segments: items separated by dim " > "
+        segments: list[tuple[str, int]] = []
+        for i, item in enumerate(self._breadcrumb):
+            if i > 0:
+                segments.append((" > ", self._attr_dim()))
+            # Last item is bold, others are normal
+            if i == len(self._breadcrumb) - 1:
+                segments.append((item, self._attr_white_bold()))
+            else:
+                segments.append((item, self._attr_normal()))
+
+        # Calculate total length to center it
+        total_len = sum(len(text) for text, _ in segments)
+        pad = max((width - total_len) // 2, 2)
+
+        cx = pad
+        for text, attr in segments:
+            self._safe_addstr(y, cx, text, attr)
+            cx += len(text)
+
+        return y + 1
 
     def _draw_hline(self, y: int, x: int, width: int) -> None:
         """Draw a horizontal line of H_LINE characters."""
@@ -1461,10 +1612,11 @@ class InteractiveSelector:
         return max(max_x, 60), max(max_y, 16)
 
     def _banner_height(self, width: int) -> int:
-        """Return the number of rows the banner occupies (lines + version)."""
+        """Return the number of rows the banner occupies (lines + version + breadcrumb)."""
+        extra = 1 if self._breadcrumb else 0
         if width >= 90:
-            return len(BANNER_LINES_LARGE) + 1  # 7
-        return len(BANNER_LINES_COMPACT) + 1  # 4
+            return len(BANNER_LINES_LARGE) + 1 + extra  # 7 + breadcrumb
+        return len(BANNER_LINES_COMPACT) + 1 + extra  # 4 + breadcrumb
 
     def _page_size(self) -> int:
         w, h = self._get_screen_size()

@@ -11,6 +11,10 @@ STRINGS: dict[str, str] = {
     "menu.settings":         "Impostazioni",
     "menu.exit":             "Esci",
     "menu.back":             "Indietro",
+    "menu.exit_confirm":     "Vuoi davvero uscire?",
+    "menu.yes":              "Si",
+    "menu.no":               "No",
+    "menu.goodbye":          "Grazie per aver usato Streamload. Arrivederci!",
 
     # ── Search ────────────────────────────────────────────────────────────
     "search.prompt":           "Inserisci il titolo da cercare",
@@ -18,6 +22,7 @@ STRINGS: dict[str, str] = {
     "search.results_found":    "{count} risultati trovati per \"{query}\"",
     "search.searching":        "Ricerca in corso su {service}...",
     "search.global_searching": "Ricerca in corso su tutti i servizi...",
+    "search.searching_service": "Cerca su {service}",
 
     # ── Download ──────────────────────────────────────────────────────────
     "download.select_quality":  "Seleziona la qualita video",
@@ -39,6 +44,8 @@ STRINGS: dict[str, str] = {
     "series.all_episodes":     "Tutti gli episodi",
     "series.episode_range":    "Episodi da {start} a {end}",
     "series.episodes_selected": "{count} episodi selezionati",
+    "series.loading_seasons":  "Caricamento stagioni per {name}...",
+    "series.loading_episodes": "Caricamento episodi per {name}...",
 
     # ── Track selection ───────────────────────────────────────────────────
     "tracks.video_header":    "Tracce video disponibili",
@@ -61,6 +68,15 @@ STRINGS: dict[str, str] = {
     "settings.off":                "disattivo",
     "settings.saved":              "Impostazioni salvate",
     "settings.reset":              "Impostazioni ripristinate ai valori predefiniti",
+    "settings.select_language":    "Seleziona la lingua",
+    "settings.output_dir_prompt":  "Cartella di output (attuale: {current})",
+    "settings.preferred_audio_prompt": "Lingua audio preferita (es. ita|it, eng|en)",
+    "settings.preferred_subtitle_prompt": "Lingua sottotitoli preferita (es. ita|it, eng|en)",
+    "settings.max_concurrent_prompt": "Download simultanei ({lo}-{hi}, attuale: {current})",
+    "settings.thread_count_prompt": "Thread per download ({lo}-{hi}, attuale: {current})",
+    "settings.invalid_number":     "Numero non valido: {value}",
+    "settings.auto_update_enabled": "Aggiornamento automatico attivato",
+    "settings.auto_update_disabled": "Aggiornamento automatico disattivato",
 
     # ── Errors ────────────────────────────────────────────────────────────
     "error.generic":         "Si e verificato un errore: {message}",
@@ -73,6 +89,10 @@ STRINGS: dict[str, str] = {
     "error.auth_required":   "Autenticazione richiesta per {service}",
     "error.auth_failed":     "Autenticazione fallita per {service}",
     "error.no_streams":      "Nessuno stream disponibile per {name}",
+    "error.no_seasons":      "Nessuna stagione trovata.",
+    "error.no_episodes":     "Nessun episodio trovato.",
+    "error.no_services":     "Nessun servizio caricato.",
+    "error.service_unavailable": "Il servizio '{service}' non e disponibile.",
 
     # ── Navigation ──────────────────────────────────────────────────────
     "nav.filter_placeholder":  "Digita per filtrare...",
@@ -111,4 +131,29 @@ STRINGS: dict[str, str] = {
     "system.updating":         "Aggiornamento in corso...",
     "system.update_done":      "Aggiornamento completato alla versione {version}",
     "system.startup":          "Avvio di Streamload v{version}...",
+    "system.restart_required": "Riavvia Streamload per utilizzare la nuova versione.",
+    "system.update_failed":    "Aggiornamento fallito. Controlla il log per i dettagli.",
+
+    # ── Download (resolving) ─────────────────────────────────────────────
+    "download.resolving_streams": "Risoluzione stream per {name}...",
+    "download.stream_resolution": "Risoluzione stream",
+    "download.completed_summary": "Completati: {done}/{total}",
+    "download.failed_summary":    "Falliti: {failed}",
+    "download.skipping_episode":  "Salto E{number} -- impossibile risolvere gli stream.",
+
+    # ── Film info ────────────────────────────────────────────────────────
+    "info.film_details":     "Dettagli contenuto",
+    "info.title":            "Titolo",
+    "info.year":             "Anno",
+    "info.genre":            "Genere",
+    "info.service":          "Servizio",
+    "info.type":             "Tipo",
+    "info.not_available":    "N/D",
+    "info.continue":         "Premi Invio per continuare...",
+
+    # ── Breadcrumb ───────────────────────────────────────────────────────
+    "breadcrumb.home":       "Home",
+    "breadcrumb.results":    "Risultati",
+    "breadcrumb.tracks":     "Tracce",
+    "breadcrumb.season":     "Stagione {n}",
 }

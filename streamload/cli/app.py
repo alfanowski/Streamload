@@ -197,6 +197,30 @@ class StreamloadApp:
         self._updater: Updater | None = None
         self._progress_ui: DownloadProgressUI | None = None
         self._callbacks: CLICallbacks | None = None
+        self._breadcrumb: list[str] = []
+
+    # ------------------------------------------------------------------
+    # Breadcrumb helpers
+    # ------------------------------------------------------------------
+
+    def _push_breadcrumb(self, name: str) -> None:
+        """Add a level to the breadcrumb trail."""
+        self._breadcrumb.append(name)
+        if self._selector is not None:
+            self._selector.set_breadcrumb(self._breadcrumb)
+
+    def _pop_breadcrumb(self) -> None:
+        """Remove the last level from the breadcrumb trail."""
+        if self._breadcrumb:
+            self._breadcrumb.pop()
+        if self._selector is not None:
+            self._selector.set_breadcrumb(self._breadcrumb)
+
+    def _set_breadcrumb(self, path: list[str]) -> None:
+        """Replace the entire breadcrumb trail."""
+        self._breadcrumb = list(path)
+        if self._selector is not None:
+            self._selector.set_breadcrumb(self._breadcrumb)
 
     # ==================================================================
     # Entry point
@@ -212,7 +236,8 @@ class StreamloadApp:
                 self._startup()
                 self._main_menu_loop()
             except KeyboardInterrupt:
-                self._safe_print("\n[dim]Interrupted. Goodbye.[/dim]")
+                goodbye = self._i18n.t("menu.goodbye") if self._i18n else "Goodbye."
+                self._safe_print(f"\n[dim]{goodbye}[/dim]")
             except Exception as exc:
                 log.error("Fatal error", exc_info=True)
                 self._safe_print(f"\n[bold red]Fatal error:[/bold red] {exc}")
@@ -364,7 +389,7 @@ class StreamloadApp:
             default=False,
         ):
             self._selector.show_loading(
-                self._i18n.t("system.updating"), title="Updating"
+                self._i18n.t("system.updating"), title=self._i18n.t("system.updating")
             )
             try:
                 success = self._updater.apply_update(info, project_root=Path.cwd())
@@ -374,9 +399,9 @@ class StreamloadApp:
                 self._prompts.show_success(
                     self._i18n.t("system.update_done", version=info.version)
                 )
-                self._prompts.show_info("Please restart Streamload to use the new version.")
+                self._prompts.show_info(self._i18n.t("system.restart_required"))
             else:
-                self._prompts.show_error("Update failed. Check the log for details.")
+                self._prompts.show_error(self._i18n.t("system.update_failed"))
 
     # ==================================================================
     # Main menu
@@ -398,6 +423,7 @@ class StreamloadApp:
 
         while True:
             try:
+                self._set_breadcrumb([self._i18n.t("breadcrumb.home")])
                 choices = [
                     self._i18n.t("menu.global_search"),
                     self._i18n.t("menu.select_service"),
@@ -410,10 +436,18 @@ class StreamloadApp:
                 )
 
                 if selection is None or selection == 3:
-                    self._console.print(
-                        "\n[dim]Thank you for using Streamload. Goodbye.[/dim]\n"
+                    # Show exit confirmation dialog
+                    self._set_breadcrumb([self._i18n.t("breadcrumb.home")])
+                    confirm = self._selector.select_from_list(
+                        [self._i18n.t("menu.yes"), self._i18n.t("menu.no")],
+                        title=self._i18n.t("menu.exit_confirm"),
                     )
-                    break
+                    if confirm == 0:
+                        self._console.print(
+                            f"\n[dim]{self._i18n.t('menu.goodbye')}[/dim]\n"
+                        )
+                        break
+                    continue
                 elif selection == 0:
                     self._global_search()
                 elif selection == 1:
@@ -442,6 +476,11 @@ class StreamloadApp:
         assert self._prompts is not None
         assert self._selector is not None
         assert self._i18n is not None
+
+        self._set_breadcrumb([
+            self._i18n.t("breadcrumb.home"),
+            self._i18n.t("menu.global_search"),
+        ])
 
         query = self._selector.text_input(
             self._i18n.t("search.prompt"),
@@ -491,9 +530,16 @@ class StreamloadApp:
         assert self._selector is not None
         assert self._i18n is not None
 
+        self._set_breadcrumb([
+            self._i18n.t("breadcrumb.home"),
+            service.name,
+        ])
+
+        search_title = self._i18n.t("search.searching_service", service=service.name)
+
         query = self._selector.text_input(
             self._i18n.t("search.prompt"),
-            title=f"Search {service.name}",
+            title=search_title,
         )
         if query is None or not query.strip():
             return
@@ -503,7 +549,7 @@ class StreamloadApp:
         search_error: Exception | None = None
         self._selector.show_loading(
             self._i18n.t("search.searching", service=service.name),
-            title=f"Search {service.name}",
+            title=search_title,
         )
         try:
             entries = service.search(query)
@@ -547,9 +593,10 @@ class StreamloadApp:
         """Show a numbered list of services and let the user pick one."""
         assert self._prompts is not None
         assert self._selector is not None
+        assert self._i18n is not None
 
         if not self._services:
-            self._prompts.show_warning("No services loaded.")
+            self._prompts.show_warning(self._i18n.t("error.no_services"))
             return None
 
         names: list[str] = []
@@ -561,9 +608,9 @@ class StreamloadApp:
             names.append(f"{svc.name} [dim]({svc.language})[/dim]{auth_tag}")
             keys.append(key)
 
-        names.append(self._i18n.t("menu.back") if self._i18n else "Back")
+        names.append(self._i18n.t("menu.back"))
         idx = self._selector.select_from_list(
-            names, title="Select a service"
+            names, title=self._i18n.t("nav.select_service"),
         )
 
         if idx is None or idx >= len(keys):
@@ -574,21 +621,36 @@ class StreamloadApp:
     def _pick_from_results(self, results: list[SearchResult]) -> None:
         """Let the user pick a result using the table-based selector."""
         assert self._selector is not None
+        assert self._i18n is not None
 
         if not results:
             return
 
+        self._push_breadcrumb(self._i18n.t("breadcrumb.results"))
+
         # Build structured data for the table renderer
+        _SVC_SHORT = {
+            "StreamingCommunity": "SC",
+            "AnimeUnity": "AU",
+            "AnimeWorld": "AW",
+            "Crunchyroll": "CR",
+            "RaiPlay": "RP",
+            "Mediaset Infinity": "MI",
+            "Discovery+": "DC",
+            "GuardaSerie": "GS",
+            "MostraGuarda": "MG",
+            "TubiTV": "TB",
+            "DMAX": "DM",
+            "Nove": "NV",
+            "Real Time": "RT",
+            "Food Network": "FN",
+            "HomeGardenTV": "HG",
+        }
+
         table_data = []
         for r in results:
             entry = r.entry
             svc_abbr = r.service_display_name
-            # Abbreviate long service names
-            _SVC_SHORT = {
-                "StreamingCommunity": "SC",
-                "AnimeUnity": "AU",
-                "AniList": "AL",
-            }
             svc_short = _SVC_SHORT.get(svc_abbr, svc_abbr)
             table_data.append({
                 "type": entry.type.value.upper(),
@@ -599,7 +661,7 @@ class StreamloadApp:
 
         idx = self._selector.select_search_results(
             table_data,
-            title="Select a title",
+            title=self._i18n.t("nav.select_title"),
         )
         if idx is None or idx >= len(results):
             return
@@ -627,8 +689,9 @@ class StreamloadApp:
         service = self._services.get(entry.service)
         if service is None:
             assert self._prompts is not None
+            assert self._i18n is not None
             self._prompts.show_error(
-                f"Service '{entry.service}' is not available."
+                self._i18n.t("error.service_unavailable", service=entry.service)
             )
             return
 
@@ -653,9 +716,30 @@ class StreamloadApp:
             log.error("Unexpected error handling result", exc_info=True)
 
     def _handle_film(self, entry: MediaEntry, service: ServiceBase) -> None:
-        """Film flow: get streams -> select tracks -> download."""
+        """Film flow: show info -> get streams -> select tracks -> download."""
         assert self._prompts is not None
+        assert self._selector is not None
         assert self._i18n is not None
+
+        self._set_breadcrumb([
+            self._i18n.t("breadcrumb.home"),
+            service.name,
+            entry.title,
+        ])
+
+        # Show film info panel.
+        na = self._i18n.t("info.not_available")
+        info_lines = [
+            (self._i18n.t("info.title") + ":", entry.title),
+            (self._i18n.t("info.year") + ":", str(entry.year) if entry.year else na),
+            (self._i18n.t("info.genre") + ":", entry.genre or na),
+            (self._i18n.t("info.service") + ":", service.name),
+            (self._i18n.t("info.type") + ":", entry.type.value.upper()),
+        ]
+        self._selector.show_info_panel(
+            info_lines,
+            title=self._i18n.t("info.film_details"),
+        )
 
         # Resolve streams.
         bundle = self._get_streams(entry, service)
@@ -663,6 +747,12 @@ class StreamloadApp:
             return
 
         # Select tracks.
+        self._set_breadcrumb([
+            self._i18n.t("breadcrumb.home"),
+            service.name,
+            entry.title,
+            self._i18n.t("breadcrumb.tracks"),
+        ])
         tracks = self._select_tracks(bundle)
         if tracks is None:
             return
@@ -679,11 +769,17 @@ class StreamloadApp:
 
         from streamload.cli.ui.tables import format_season
 
+        self._set_breadcrumb([
+            self._i18n.t("breadcrumb.home"),
+            service.name,
+            entry.title,
+        ])
+
         # Fetch seasons.
         seasons: list[Season] = []
         season_error: Exception | None = None
         self._selector.show_loading(
-            f"Loading seasons for {entry.title}...",
+            self._i18n.t("series.loading_seasons", name=entry.title),
             title=entry.title,
         )
         try:
@@ -700,7 +796,7 @@ class StreamloadApp:
             return
 
         if not seasons:
-            self._prompts.show_warning("No seasons found.")
+            self._prompts.show_warning(self._i18n.t("error.no_seasons"))
             return
 
         # Pick season using the interactive selector.
@@ -714,11 +810,18 @@ class StreamloadApp:
 
         selected_season = seasons[season_idx]
 
+        self._set_breadcrumb([
+            self._i18n.t("breadcrumb.home"),
+            service.name,
+            entry.title,
+            self._i18n.t("breadcrumb.season", n=selected_season.number),
+        ])
+
         # Fetch episodes.
         episodes: list[Episode] = []
         ep_error: Exception | None = None
         self._selector.show_loading(
-            f"Loading episodes for Season {selected_season.number}...",
+            self._i18n.t("series.loading_episodes", name=f"Season {selected_season.number}"),
             title=entry.title,
         )
         try:
@@ -735,7 +838,7 @@ class StreamloadApp:
             return
 
         if not episodes:
-            self._prompts.show_warning("No episodes found.")
+            self._prompts.show_warning(self._i18n.t("error.no_episodes"))
             return
 
         # Pick episodes.
@@ -755,6 +858,12 @@ class StreamloadApp:
         if first_bundle is None:
             return
 
+        self._set_breadcrumb([
+            self._i18n.t("breadcrumb.home"),
+            service.name,
+            entry.title,
+            self._i18n.t("breadcrumb.tracks"),
+        ])
         tracks = self._select_tracks(first_bundle)
         if tracks is None:
             return
@@ -768,7 +877,7 @@ class StreamloadApp:
                 bundle = self._get_streams(ep, service)
                 if bundle is None:
                     self._prompts.show_warning(
-                        f"Skipping E{ep.number:02d} -- could not resolve streams."
+                        self._i18n.t("download.skipping_episode", number=f"{ep.number:02d}")
                     )
                     continue
 
@@ -794,8 +903,8 @@ class StreamloadApp:
         stream_error: Exception | None = None
         bundle: StreamBundle | None = None
         self._selector.show_loading(
-            f"Resolving streams for {name}...",
-            title="Stream Resolution",
+            self._i18n.t("download.resolving_streams", name=name),
+            title=self._i18n.t("download.stream_resolution"),
         )
         try:
             bundle = service.get_streams(item)
@@ -912,10 +1021,11 @@ class StreamloadApp:
                 )
 
         self._console.print()
-        self._prompts.show_info(
-            f"Completed: {len(completed)}/{len(jobs)}"
-            + (f"  |  Failed: {len(failed)}" if failed else "")
-        )
+        assert self._i18n is not None
+        summary = self._i18n.t("download.completed_summary", done=len(completed), total=len(jobs))
+        if failed:
+            summary += "  |  " + self._i18n.t("download.failed_summary", failed=len(failed))
+        self._prompts.show_info(summary)
 
     @staticmethod
     def _job_display_name(job: DownloadJob) -> str:
@@ -935,6 +1045,11 @@ class StreamloadApp:
         assert self._prompts is not None
         assert self._selector is not None
         assert self._i18n is not None
+
+        self._set_breadcrumb([
+            self._i18n.t("breadcrumb.home"),
+            self._i18n.t("menu.settings"),
+        ])
 
         while True:
             try:
@@ -963,17 +1078,17 @@ class StreamloadApp:
                 elif idx == 0:
                     self._change_language()
                 elif idx == 1:
-                    self._change_setting_string("preferred_audio", "Preferred audio language (e.g. ita|it, eng|en)")
+                    self._change_setting_string("preferred_audio", self._i18n.t("settings.preferred_audio_prompt"))
                 elif idx == 2:
-                    self._change_setting_string("preferred_subtitle", "Preferred subtitle language (e.g. ita|it, eng|en)")
+                    self._change_setting_string("preferred_subtitle", self._i18n.t("settings.preferred_subtitle_prompt"))
                 elif idx == 3:
                     self._change_output_path()
                 elif idx == 4:
                     self._change_output_format()
                 elif idx == 5:
-                    self._change_setting_int("download.max_concurrent", "Max concurrent downloads", 1, 10)
+                    self._change_setting_int("download.max_concurrent", self._i18n.t("settings.max_concurrent"), 1, 10)
                 elif idx == 6:
-                    self._change_setting_int("download.thread_count", "Thread count per download", 1, 32)
+                    self._change_setting_int("download.thread_count", self._i18n.t("settings.thread_count"), 1, 32)
                 elif idx == 7:
                     self._toggle_auto_update()
 
@@ -984,10 +1099,11 @@ class StreamloadApp:
         """Let the user switch display language."""
         assert self._prompts is not None
         assert self._selector is not None
+        assert self._i18n is not None
 
         lang_choices = ["English", "Italiano", "Auto-detect"]
         idx = self._selector.select_from_list(
-            lang_choices, title="Select language"
+            lang_choices, title=self._i18n.t("settings.select_language"),
         )
         if idx is None:
             return
@@ -1011,8 +1127,8 @@ class StreamloadApp:
 
         config = self._config_mgr.config
         new_path = self._selector.text_input(
-            f"Output directory (current: {config.output.root_path})",
-            title="Settings",
+            self._i18n.t("settings.output_dir_prompt", current=config.output.root_path),
+            title=self._i18n.t("settings.title"),
         )
         if new_path is not None and new_path.strip():
             config.output.root_path = new_path.strip()
@@ -1027,7 +1143,7 @@ class StreamloadApp:
 
         fmt_choices = ["mkv", "mp4"]
         idx = self._selector.select_from_list(
-            fmt_choices, title="Output format"
+            fmt_choices, title=self._i18n.t("settings.output_format"),
         )
         if idx is None:
             return
@@ -1047,7 +1163,7 @@ class StreamloadApp:
         current = self._get_config_field(config, field_path)
         new_val = self._selector.text_input(
             f"{label} (current: {current})",
-            title="Settings",
+            title=self._i18n.t("settings.title"),
         )
         if new_val is not None and new_val.strip():
             self._set_config_field(config, field_path, new_val.strip())
@@ -1066,7 +1182,7 @@ class StreamloadApp:
         current = self._get_config_field(config, field_path)
         raw = self._selector.text_input(
             f"{label} ({lo}-{hi}, current: {current})",
-            title="Settings",
+            title=self._i18n.t("settings.title"),
         )
         if raw is None:
             return
@@ -1076,7 +1192,7 @@ class StreamloadApp:
             self._config_mgr.save_config(config)
             self._prompts.show_success(self._i18n.t("settings.saved"))
         except ValueError:
-            self._prompts.show_error(f"Invalid number: {raw}")
+            self._prompts.show_error(self._i18n.t("settings.invalid_number", value=raw))
 
     def _toggle_auto_update(self) -> None:
         """Toggle the auto-update setting."""
@@ -1086,8 +1202,10 @@ class StreamloadApp:
         config = self._config_mgr.config
         config.auto_update = not config.auto_update
         self._config_mgr.save_config(config)
-        state = "enabled" if config.auto_update else "disabled"
-        self._prompts.show_success(f"Auto-update {state}")
+        if config.auto_update:
+            self._prompts.show_success(self._i18n.t("settings.auto_update_enabled"))
+        else:
+            self._prompts.show_success(self._i18n.t("settings.auto_update_disabled"))
 
     @staticmethod
     def _get_config_field(config: object, path: str) -> object:
