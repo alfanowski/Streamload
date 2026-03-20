@@ -218,9 +218,9 @@ def build_playlist_url(params: PlayerParams) -> str | None:
     if existing_qs.get("b") == ["1"]:
         query_params["b"] = "1"
 
-    # Request FHD when the player signals support.
-    if params.can_play_fhd:
-        query_params["h"] = "1"
+    # Always request FHD. If the server doesn't support it, the playlist
+    # will simply not include 1080p variants (graceful fallback).
+    query_params["h"] = "1"
 
     # Authentication.
     if params.token:

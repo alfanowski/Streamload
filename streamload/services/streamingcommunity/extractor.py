@@ -67,6 +67,16 @@ def extract_streams(
     parser = M3U8Parser()
     bundle = parser.parse_master(resp.text, playlist_url)
 
+    # If playlist with h=1 (FHD) returned empty tracks, retry without it.
+    # Some content/accounts don't support FHD and return empty playlists.
+    if not bundle.video and "h=1" in playlist_url:
+        fallback_url = playlist_url.replace("h=1&", "").replace("&h=1", "").replace("h=1", "")
+        log.info("FHD playlist empty, retrying without h=1: %s", fallback_url)
+        resp = http.get(fallback_url, headers={"Referer": _VIXCLOUD_REFERER})
+        resp.raise_for_status()
+        bundle = parser.parse_master(resp.text, fallback_url)
+        playlist_url = fallback_url
+
     # Carry over the manifest URL and required headers for segment downloads.
     bundle.manifest_url = playlist_url
     bundle.extra_headers = {"Referer": _VIXCLOUD_REFERER}
