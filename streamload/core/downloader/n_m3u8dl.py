@@ -46,6 +46,143 @@ def _extract_field(text: str, pattern: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _format_size(size_bytes: int) -> str:
+    """Format bytes to human-readable."""
+    if size_bytes >= 1024 ** 3:
+        return f"{size_bytes / (1024 ** 3):.1f} GB"
+    if size_bytes >= 1024 ** 2:
+        return f"{size_bytes / (1024 ** 2):.1f} MB"
+    if size_bytes >= 1024:
+        return f"{size_bytes / 1024:.1f} KB"
+    return f"{size_bytes} B"
+
+
+def _draw_completion_screen(
+    stdscr: Any,
+    filename: str,
+    file_size: int = 0,
+    cancelled: bool = False,
+) -> None:
+    """Draw download completion or cancellation screen."""
+    import curses
+
+    CYAN_B = curses.color_pair(1) | curses.A_BOLD
+    WHITE_B = curses.color_pair(2) | curses.A_BOLD
+    GREEN_B = curses.color_pair(3) | curses.A_BOLD
+    DIM = curses.A_DIM
+
+    try:
+        h, w = stdscr.getmaxyx()
+    except curses.error:
+        return
+
+    stdscr.erase()
+    for row in range(h):
+        try:
+            stdscr.move(row, 0)
+            stdscr.clrtoeol()
+        except curses.error:
+            pass
+
+    # Banner
+    banner_compact = [
+        "╔═╗╔╦╗╦═╗╔═╗╔═╗╔╦╗╦  ╔═╗╔═╗╔╦╗",
+        "╚═╗ ║ ╠╦╝║╣ ╠═╣║║║║  ║ ║╠═╣ ║║",
+        "╚═╝ ╩ ╩╚═╚═╝╩ ╩╩ ╩╩═╝╚═╝╩ ╩═╩╝",
+    ]
+    banner_large = [
+        "███████╗████████╗██████╗ ███████╗ █████╗ ███╗   ███╗██╗      ██████╗  █████╗ ██████╗ ",
+        "██╔════╝╚══██╔══╝██╔══██╗██╔════╝██╔══██╗████╗ ████║██║     ██╔═══██╗██╔══██╗██╔══██╗",
+        "███████╗   ██║   ██████╔╝█████╗  ███████║██╔████╔██║██║     ██║   ██║███████║██║  ██║",
+        "╚════██║   ██║   ██╔══██╗██╔══╝  ██╔══██║██║╚██╔╝██║██║     ██║   ██║██╔══██║██║  ██║",
+        "███████║   ██║   ██║  ██║███████╗██║  ██║██║ ╚═╝ ██║███████╗╚██████╔╝██║  ██║██████╔╝",
+        "╚══════╝   ╚═╝   ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚═════╝ ",
+    ]
+    banner = banner_large if w >= 90 else banner_compact
+    for i, bline in enumerate(banner):
+        x = max((w - len(bline)) // 2, 0)
+        try:
+            stdscr.addstr(1 + i, x, bline, CYAN_B)
+        except curses.error:
+            pass
+
+    banner_end = 1 + len(banner) + 1
+    box_w = min(w - 6, 50)
+    box_x = max((w - box_w) // 2, 2)
+
+    def safe(y: int, x: int, text: str, attr: int = 0):
+        try:
+            stdscr.addstr(y, x, text[:w - x - 1], attr)
+        except curses.error:
+            pass
+
+    if cancelled:
+        title = " Annullato "
+        status_text = "Download annullato"
+        status_attr = curses.color_pair(1) | curses.A_BOLD
+    else:
+        title = " Completato "
+        status_text = "✓ Download completato!"
+        status_attr = GREEN_B
+
+    # Box top
+    inner = box_w - 2
+    tl = (inner - len(title)) // 2
+    tr = inner - len(title) - tl
+    y = banner_end
+    safe(y, box_x, "╭" + "─" * tl, CYAN_B)
+    safe(y, box_x + 1 + tl, title, WHITE_B)
+    safe(y, box_x + 1 + tl + len(title), "─" * tr + "╮", CYAN_B)
+    y += 1
+
+    # Empty
+    safe(y, box_x, "│", CYAN_B); safe(y, box_x + box_w - 1, "│", CYAN_B); y += 1
+
+    # Status
+    safe(y, box_x, "│", CYAN_B)
+    sx = box_x + max((box_w - len(status_text)) // 2, 2)
+    safe(y, sx, status_text, status_attr)
+    safe(y, box_x + box_w - 1, "│", CYAN_B)
+    y += 1
+
+    # Empty
+    safe(y, box_x, "│", CYAN_B); safe(y, box_x + box_w - 1, "│", CYAN_B); y += 1
+
+    # Filename
+    fn = filename[:box_w - 6]
+    safe(y, box_x, "│", CYAN_B)
+    safe(y, box_x + max((box_w - len(fn)) // 2, 2), fn, WHITE_B)
+    safe(y, box_x + box_w - 1, "│", CYAN_B)
+    y += 1
+
+    # File size
+    if file_size > 0:
+        size_str = _format_size(file_size)
+        safe(y, box_x, "│", CYAN_B)
+        safe(y, box_x + max((box_w - len(size_str)) // 2, 2), size_str, DIM)
+        safe(y, box_x + box_w - 1, "│", CYAN_B)
+        y += 1
+
+    # Empty
+    safe(y, box_x, "│", CYAN_B); safe(y, box_x + box_w - 1, "│", CYAN_B); y += 1
+
+    # Hint
+    if not cancelled:
+        hint = "Premi un tasto per continuare"
+        safe(y, box_x, "│", CYAN_B)
+        safe(y, box_x + max((box_w - len(hint)) // 2, 2), hint, DIM)
+        safe(y, box_x + box_w - 1, "│", CYAN_B)
+        y += 1
+
+    # Empty
+    safe(y, box_x, "│", CYAN_B); safe(y, box_x + box_w - 1, "│", CYAN_B); y += 1
+
+    # Box bottom
+    safe(y, box_x, "╰" + "─" * (box_w - 2) + "╯", CYAN_B)
+
+    stdscr.refresh()
+
+
 def _draw_download_screen(
     stdscr: Any,
     filename: str,
@@ -416,9 +553,23 @@ class N_m3u8dlDownloader:
             vid_eta = ""
             aud_info = ""
 
+            # Enable non-blocking key reading for 'q' cancel
+            stdscr.nodelay(True)
+
             _draw_download_screen(stdscr, filename, vid_pct, vid_size, vid_speed, vid_eta, aud_pct, aud_info)
 
+            cancelled = False
             for raw_line in proc.stdout:
+                # Check for 'q' cancel
+                try:
+                    ch = stdscr.getch()
+                    if ch == ord('q') or ch == ord('Q'):
+                        proc.terminate()
+                        cancelled = True
+                        break
+                except curses.error:
+                    pass
+
                 line = raw_line.strip()
                 if not line:
                     continue
@@ -442,30 +593,55 @@ class N_m3u8dlDownloader:
 
             proc.wait()
 
-            # Clean exit from curses
-            curses.endwin()
-            stdscr = None
-            # Re-enter alt screen
-            sys.stdout.write("\033[?1049h\033[2J\033[H")
-            sys.stdout.flush()
+            if cancelled:
+                log.info("Download cancelled by user")
+                # Show cancelled message briefly
+                _draw_completion_screen(stdscr, filename, cancelled=True)
+                import time; time.sleep(1.5)
+                curses.endwin()
+                stdscr = None
+                sys.stdout.write("\033[?1049h\033[2J\033[H")
+                sys.stdout.flush()
+                return None
 
             if proc.returncode != 0:
                 log.error("N_m3u8DL-RE exited with code %d", proc.returncode)
+                curses.endwin()
+                stdscr = None
+                sys.stdout.write("\033[?1049h\033[2J\033[H")
+                sys.stdout.flush()
                 return None
 
             # Find the output file
-            for ext in (".ts", ".mp4", ".mkv", ".m4a"):
+            result_path = None
+            for ext in (".mkv", ".ts", ".mp4", ".m4a"):
                 candidate = output_dir / f"{filename}{ext}"
                 if candidate.exists():
-                    return candidate
+                    result_path = candidate
+                    break
 
-            # Check for any file matching filename
-            for f in output_dir.iterdir():
-                if f.stem == filename and f.is_file():
-                    return f
+            if result_path is None:
+                for f in output_dir.iterdir():
+                    if f.stem == filename and f.is_file():
+                        result_path = f
+                        break
 
-            log.warning("N_m3u8DL-RE completed but output file not found")
-            return None
+            # Show completion screen
+            file_size = result_path.stat().st_size if result_path and result_path.exists() else 0
+            _draw_completion_screen(stdscr, filename, file_size=file_size)
+            # Wait for user to press any key
+            stdscr.nodelay(False)
+            stdscr.getch()
+
+            # Clean exit
+            curses.endwin()
+            stdscr = None
+            sys.stdout.write("\033[?1049h\033[2J\033[H")
+            sys.stdout.flush()
+
+            if result_path is None:
+                log.warning("N_m3u8DL-RE completed but output file not found")
+            return result_path
 
         except FileNotFoundError:
             log.error("N_m3u8DL-RE binary not found: %s", self._binary)
@@ -507,6 +683,7 @@ class N_m3u8dlDownloader:
             "--del-after-done",
             "--auto-subtitle-fix", "false",
             "--check-segments-count", "false",
+            "--mux-after-done", "format=mkv",
             "--no-log",
         ]
 
