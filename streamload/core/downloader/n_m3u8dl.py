@@ -106,7 +106,11 @@ def _draw_download_screen(
     # Box - keep everything well inside terminal width
     box_w = min(w - 6, 68)
     box_x = max((w - box_w) // 2, 2)
-    bar_w = max(box_w - 24, 10)
+    # Fixed layout columns: label(20) + bar + pct(7) + padding(4)
+    label_col = 20  # fixed label width
+    pct_col = 7     # "  5.1%"
+    bar_start = box_x + 3 + label_col
+    bar_w = max(box_w - label_col - pct_col - 6, 8)
 
     def safe(y: int, x: int, text: str, attr: int = 0):
         try:
@@ -145,35 +149,37 @@ def _draw_download_screen(
 
     box_border(y); y += 1
 
-    # Video progress
+    # Video progress - label and bar on same line, fixed columns
     box_border(y)
     safe(y, box_x + 3, "Video", CYAN_B)
-    draw_bar(y, box_x + 10, vid_pct, bar_w)
-    safe(y, box_x + 11 + bar_w, f"{vid_pct:5.1f}%", WHITE_B)
+    draw_bar(y, bar_start, vid_pct, bar_w)
+    safe(y, bar_start + bar_w + 1, f"{vid_pct:5.1f}%", WHITE_B)
     y += 1
 
     # Video detail
     box_border(y)
-    detail_x = box_x + 10
+    detail_parts = []
     if vid_size:
-        safe(y, detail_x, vid_size, DIM)
-        detail_x += len(vid_size) + 2
+        detail_parts.append(vid_size)
     if vid_speed:
-        safe(y, detail_x, vid_speed, GREEN_B)
-        detail_x += len(vid_speed) + 2
+        detail_parts.append(vid_speed)
     if vid_eta:
-        safe(y, detail_x, f"ETA {vid_eta}", DIM)
+        detail_parts.append(f"ETA {vid_eta}")
+    detail_x = bar_start
+    for i, part in enumerate(detail_parts):
+        attr = GREEN_B if ("Bps" in part or "bps" in part) else DIM
+        safe(y, detail_x, part, attr)
+        detail_x += len(part) + 2
     y += 1
 
     box_border(y); y += 1
 
-    # Audio progress
+    # Audio progress - same fixed columns as video
     aud_label = f"Audio ({aud_info})" if aud_info else "Audio"
     box_border(y)
-    safe(y, box_x + 3, aud_label, CYAN_B)
-    aud_bar_x = box_x + 4 + len(aud_label)
-    draw_bar(y, aud_bar_x, aud_pct, bar_w)
-    safe(y, aud_bar_x + bar_w + 1, f"{aud_pct:5.1f}%", WHITE_B)
+    safe(y, box_x + 3, aud_label[:label_col], CYAN_B)
+    draw_bar(y, bar_start, aud_pct, bar_w)
+    safe(y, bar_start + bar_w + 1, f"{aud_pct:5.1f}%", WHITE_B)
     y += 1
 
     box_border(y); y += 1
