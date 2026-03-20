@@ -2561,10 +2561,10 @@ class InteractiveSelector:
             return "ERROR: No video tracks available!"
         return None
 
-    @staticmethod
-    def _audio_warning(bundle: StreamBundle) -> str | None:
+    def _audio_warning(self, bundle: StreamBundle) -> str | None:
         if not bundle.audio:
-            return "Warning: No audio tracks. Video will have no sound."
+            # Most HLS streams without separate audio have it embedded in video
+            return self._t("tracks.audio_embedded")
         return None
 
     @staticmethod

@@ -108,6 +108,7 @@ STRINGS: dict[str, str] = {
     # ── Track selection (new) ────────────────────────────────────────────
     "tracks.no_video":         "Nessuna traccia video disponibile",
     "tracks.no_audio":         "Nessuna traccia audio trovata. Il download continuera senza audio.",
+    "tracks.audio_embedded":   "Audio incluso nel video (nessuna selezione necessaria)",
     "tracks.no_subtitle":      "Nessun sottotitolo disponibile",
     "tracks.selection_summary": "{video} | {audio_count} audio | {sub_count} sottotitoli",
     "tracks.tab_hint":         "Tab: cambia sezione | Spazio: seleziona | Invio: conferma",
