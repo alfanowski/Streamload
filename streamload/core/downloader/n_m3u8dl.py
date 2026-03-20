@@ -46,183 +46,132 @@ def _extract_field(text: str, pattern: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _render_download_ui(
+def _draw_download_screen(
+    stdscr: Any,
     filename: str,
     vid_pct: float,
-    vid_info: str,
+    vid_size: str,
+    vid_speed: str,
+    vid_eta: str,
     aud_pct: float,
     aud_info: str,
 ) -> None:
-    """Render download progress UI using curses for pixel-perfect alignment."""
+    """Draw download progress screen on an already-initialized curses window."""
     import curses
 
+    CYAN_B = curses.color_pair(1) | curses.A_BOLD
+    CYAN = curses.color_pair(1)
+    WHITE_B = curses.color_pair(2) | curses.A_BOLD
+    GREEN_B = curses.color_pair(3) | curses.A_BOLD
+    DIM = curses.A_DIM
+
     try:
-        stdscr = curses.initscr()
-        curses.noecho()
-        curses.cbreak()
-        curses.curs_set(0)
-        try:
-            curses.start_color()
-            curses.use_default_colors()
-            curses.init_pair(1, curses.COLOR_CYAN, -1)    # cyan
-            curses.init_pair(2, curses.COLOR_WHITE, -1)    # white
-            curses.init_pair(3, curses.COLOR_GREEN, -1)    # green
-        except curses.error:
-            pass
-
         h, w = stdscr.getmaxyx()
+    except curses.error:
+        return
 
-        CYAN = curses.color_pair(1)
-        CYAN_B = curses.color_pair(1) | curses.A_BOLD
-        WHITE_B = curses.color_pair(2) | curses.A_BOLD
-        GREEN_B = curses.color_pair(3) | curses.A_BOLD
-        DIM = curses.A_DIM
+    stdscr.erase()
 
-        stdscr.erase()
-
-        # Banner centered
-        banner = [
-            "╔═╗╔╦╗╦═╗╔═╗╔═╗╔╦╗╦  ╔═╗╔═╗╔╦╗",
-            "╚═╗ ║ ╠╦╝║╣ ╠═╣║║║║  ║ ║╠═╣ ║║",
-            "╚═╝ ╩ ╩╚═╚═╝╩ ╩╩ ╩╩═╝╚═╝╩ ╩═╩╝",
-        ]
-        for i, line in enumerate(banner):
-            x = max((w - len(line)) // 2, 0)
-            try:
-                stdscr.addstr(1 + i, x, line, CYAN_B)
-            except curses.error:
-                pass
-
-        # Box dimensions
-        box_w = min(w - 4, 70)
-        box_x = max((w - box_w) // 2, 1)
-        box_y = 5
-        bar_w = max(box_w - 22, 15)
-
-        def draw_box_top(y: int, title: str) -> int:
-            inner = box_w - 2
-            t = f" {title} "
-            tl = (inner - len(t)) // 2
-            tr = inner - len(t) - tl
-            try:
-                stdscr.addstr(y, box_x, "╭" + "─" * tl, CYAN_B)
-                stdscr.addstr(y, box_x + 1 + tl, t, WHITE_B)
-                stdscr.addstr(y, box_x + 1 + tl + len(t), "─" * tr + "╮", CYAN_B)
-            except curses.error:
-                pass
-            return y + 1
-
-        def draw_box_bot(y: int) -> int:
-            try:
-                stdscr.addstr(y, box_x, "╰" + "─" * (box_w - 2) + "╯", CYAN_B)
-            except curses.error:
-                pass
-            return y + 1
-
-        def draw_box_empty(y: int) -> int:
-            try:
-                stdscr.addstr(y, box_x, "│", CYAN)
-                stdscr.addstr(y, box_x + box_w - 1, "│", CYAN)
-            except curses.error:
-                pass
-            return y + 1
-
-        def draw_bar(y: int, x_start: int, pct: float, bw: int):
-            filled = int(bw * pct / 100)
-            try:
-                stdscr.addstr(y, x_start, "━" * filled, CYAN_B)
-                stdscr.addstr(y, x_start + filled, "─" * (bw - filled), DIM)
-            except curses.error:
-                pass
-
-        y = draw_box_top(box_y, "Download")
-        y = draw_box_empty(y)
-
-        # Filename
-        fn_x = box_x + max((box_w - len(filename)) // 2, 2)
+    # Banner
+    banner = [
+        "╔═╗╔╦╗╦═╗╔═╗╔═╗╔╦╗╦  ╔═╗╔═╗╔╦╗",
+        "╚═╗ ║ ╠╦╝║╣ ╠═╣║║║║  ║ ║╠═╣ ║║",
+        "╚═╝ ╩ ╩╚═╚═╝╩ ╩╩ ╩╩═╝╚═╝╩ ╩═╩╝",
+    ]
+    for i, bline in enumerate(banner):
+        x = max((w - len(bline)) // 2, 0)
         try:
-            stdscr.addstr(y, box_x, "│", CYAN)
-            stdscr.addstr(y, fn_x, filename[:box_w - 4], WHITE_B)
-            stdscr.addstr(y, box_x + box_w - 1, "│", CYAN)
+            stdscr.addstr(1 + i, x, bline, CYAN_B)
         except curses.error:
             pass
-        y += 1
-        y = draw_box_empty(y)
 
-        # Video progress
+    # Box
+    box_w = min(w - 4, 70)
+    box_x = max((w - box_w) // 2, 1)
+    bar_w = max(box_w - 22, 15)
+
+    def safe(y: int, x: int, text: str, attr: int = 0):
         try:
-            stdscr.addstr(y, box_x, "│", CYAN)
-            stdscr.addstr(y, box_x + 3, "Video", CYAN_B)
-            draw_bar(y, box_x + 10, vid_pct, bar_w)
-            pct_str = f"{vid_pct:5.1f}%"
-            stdscr.addstr(y, box_x + 11 + bar_w, pct_str, WHITE_B)
-            stdscr.addstr(y, box_x + box_w - 1, "│", CYAN)
+            stdscr.addstr(y, x, text[:w - x - 1], attr)
         except curses.error:
             pass
-        y += 1
 
-        # Video detail line
-        try:
-            stdscr.addstr(y, box_x, "│", CYAN)
-            # Clean ANSI from vid_info
-            clean_info = re.sub(r'\033\[[^m]*m', '', vid_info)
-            # Parse parts
-            parts = clean_info.strip().split()
-            info_x = box_x + 10
-            for part in parts:
-                if part.endswith("ps") or part.endswith("Bps"):
-                    stdscr.addstr(y, info_x, part, GREEN_B)
-                elif part.startswith("ETA"):
-                    stdscr.addstr(y, info_x, part, DIM)
-                else:
-                    stdscr.addstr(y, info_x, part, DIM)
-                info_x += len(part) + 1
-            stdscr.addstr(y, box_x + box_w - 1, "│", CYAN)
-        except curses.error:
-            pass
-        y += 1
-        y = draw_box_empty(y)
+    def box_border(y: int):
+        safe(y, box_x, "│", CYAN)
+        safe(y, box_x + box_w - 1, "│", CYAN)
 
-        # Audio progress
-        aud_label = f"Audio ({aud_info})" if aud_info else "Audio"
-        try:
-            stdscr.addstr(y, box_x, "│", CYAN)
-            stdscr.addstr(y, box_x + 3, aud_label, CYAN_B)
-            aud_bar_x = box_x + 4 + len(aud_label)
-            draw_bar(y, aud_bar_x, aud_pct, bar_w)
-            pct_str = f"{aud_pct:5.1f}%"
-            stdscr.addstr(y, aud_bar_x + bar_w + 1, pct_str, WHITE_B)
-            stdscr.addstr(y, box_x + box_w - 1, "│", CYAN)
-        except curses.error:
-            pass
-        y += 1
-        y = draw_box_empty(y)
+    def draw_bar(y: int, x_start: int, pct: float, bw: int):
+        filled = int(bw * pct / 100)
+        safe(y, x_start, "━" * filled, CYAN_B)
+        safe(y, x_start + filled, "─" * (bw - filled), DIM)
 
-        # Hint
-        try:
-            stdscr.addstr(y, box_x, "│", CYAN)
-            hint = "q: annulla"
-            stdscr.addstr(y, box_x + box_w - 2 - len(hint), hint, DIM)
-            stdscr.addstr(y, box_x + box_w - 1, "│", CYAN)
-        except curses.error:
-            pass
-        y += 1
-        y = draw_box_empty(y)
-        draw_box_bot(y)
+    # Box top with centered title
+    title = " Download "
+    inner = box_w - 2
+    tl = (inner - len(title)) // 2
+    tr = inner - len(title) - tl
+    y = 5
+    safe(y, box_x, "╭" + "─" * tl, CYAN_B)
+    safe(y, box_x + 1 + tl, title, WHITE_B)
+    safe(y, box_x + 1 + tl + len(title), "─" * tr + "╮", CYAN_B)
+    y += 1
 
-        stdscr.refresh()
-        curses.endwin()
+    box_border(y); y += 1
 
-        # Re-enter alternate screen (curses.endwin exits it)
-        sys.stdout.write("\033[?1049h")
-        sys.stdout.flush()
+    # Filename centered
+    fn = filename[:box_w - 6]
+    fn_x = box_x + max((box_w - len(fn)) // 2, 2)
+    box_border(y)
+    safe(y, fn_x, fn, WHITE_B)
+    y += 1
 
-    except Exception:
-        # If curses fails, just clear and show minimal text
-        try:
-            curses.endwin()
-        except Exception:
-            pass
+    box_border(y); y += 1
+
+    # Video progress
+    box_border(y)
+    safe(y, box_x + 3, "Video", CYAN_B)
+    draw_bar(y, box_x + 10, vid_pct, bar_w)
+    safe(y, box_x + 11 + bar_w, f"{vid_pct:5.1f}%", WHITE_B)
+    y += 1
+
+    # Video detail
+    box_border(y)
+    detail_x = box_x + 10
+    if vid_size:
+        safe(y, detail_x, vid_size, DIM)
+        detail_x += len(vid_size) + 2
+    if vid_speed:
+        safe(y, detail_x, vid_speed, GREEN_B)
+        detail_x += len(vid_speed) + 2
+    if vid_eta:
+        safe(y, detail_x, f"ETA {vid_eta}", DIM)
+    y += 1
+
+    box_border(y); y += 1
+
+    # Audio progress
+    aud_label = f"Audio ({aud_info})" if aud_info else "Audio"
+    box_border(y)
+    safe(y, box_x + 3, aud_label, CYAN_B)
+    aud_bar_x = box_x + 4 + len(aud_label)
+    draw_bar(y, aud_bar_x, aud_pct, bar_w)
+    safe(y, aud_bar_x + bar_w + 1, f"{aud_pct:5.1f}%", WHITE_B)
+    y += 1
+
+    box_border(y); y += 1
+
+    # Hint
+    box_border(y)
+    hint = "q: annulla"
+    safe(y, box_x + box_w - 2 - len(hint), hint, DIM)
+    y += 1
+
+    box_border(y); y += 1
+
+    # Box bottom
+    safe(y, box_x, "╰" + "─" * (box_w - 2) + "╯", CYAN_B)
+
+    stdscr.refresh()
 
 
 def _get_platform_asset_pattern() -> str:
@@ -408,7 +357,24 @@ class N_m3u8dlDownloader:
 
         log.info("N_m3u8DL-RE command: %s", " ".join(cmd))
 
+        import curses
+
+        stdscr = None
         try:
+            # Init curses ONCE for the entire download
+            stdscr = curses.initscr()
+            curses.noecho()
+            curses.cbreak()
+            curses.curs_set(0)
+            try:
+                curses.start_color()
+                curses.use_default_colors()
+                curses.init_pair(1, curses.COLOR_CYAN, -1)
+                curses.init_pair(2, curses.COLOR_WHITE, -1)
+                curses.init_pair(3, curses.COLOR_GREEN, -1)
+            except curses.error:
+                pass
+
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -421,9 +387,12 @@ class N_m3u8dlDownloader:
 
             vid_pct = 0.0
             aud_pct = 0.0
-            vid_info = ""
+            vid_size = ""
+            vid_speed = ""
+            vid_eta = ""
             aud_info = ""
-            _render_download_ui(filename, vid_pct, vid_info, aud_pct, aud_info)
+
+            _draw_download_screen(stdscr, filename, vid_pct, vid_size, vid_speed, vid_eta, aud_pct, aud_info)
 
             for raw_line in proc.stdout:
                 line = raw_line.strip()
@@ -432,24 +401,28 @@ class N_m3u8dlDownloader:
 
                 if line.startswith("Vid"):
                     pct = _extract_field(line, r"([\d.]+)%")
-                    size = _extract_field(line, r"([\d.]+\w+/[\d.]+\w+)")
-                    speed = _extract_field(line, r"([\d.]+\w+ps)")
-                    eta = _extract_field(line, r"(\d+:\d+:\d+)")
                     if pct:
                         vid_pct = float(pct)
-                    vid_info = f"{size or ''} \033[1;32m{speed or ''}\033[0;36m ETA {eta or '--:--:--'}"
+                    vid_size = _extract_field(line, r"([\d.]+\w+/[\d.]+\w+)") or vid_size
+                    vid_speed = _extract_field(line, r"([\d.]+\w+ps)") or vid_speed
+                    vid_eta = _extract_field(line, r"(\d+:\d+:\d+)") or vid_eta
                 elif line.startswith("Aud"):
                     pct = _extract_field(line, r"([\d.]+)%")
                     lang = _extract_field(line, r"Aud\s+(\w+)")
                     if pct:
                         aud_pct = float(pct)
-                    aud_info = lang or ""
+                    if lang:
+                        aud_info = lang
 
-                _render_download_ui(filename, vid_pct, vid_info, aud_pct, aud_info)
+                _draw_download_screen(stdscr, filename, vid_pct, vid_size, vid_speed, vid_eta, aud_pct, aud_info)
 
             proc.wait()
 
-            sys.stdout.write("\033[2J\033[H\033[?25h")
+            # Clean exit from curses
+            curses.endwin()
+            stdscr = None
+            # Re-enter alt screen
+            sys.stdout.write("\033[?1049h\033[2J\033[H")
             sys.stdout.flush()
 
             if proc.returncode != 0:
@@ -477,6 +450,14 @@ class N_m3u8dlDownloader:
             log.error("N_m3u8DL-RE failed: %s", exc)
             return None
         finally:
+            # Always clean up curses
+            if stdscr is not None:
+                try:
+                    curses.endwin()
+                except Exception:
+                    pass
+                sys.stdout.write("\033[?1049h\033[2J\033[H")
+                sys.stdout.flush()
             # Cleanup tmp dir
             if tmp_dir.exists() and self._config.cleanup_tmp:
                 shutil.rmtree(tmp_dir, ignore_errors=True)
