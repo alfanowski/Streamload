@@ -46,14 +46,6 @@ def _extract_field(text: str, pattern: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _make_bar(pct: float, width: int) -> str:
-    """Create a Unicode progress bar."""
-    filled = int(width * pct / 100)
-    empty = width - filled
-    bar = "\033[1;36m" + "━" * filled + "\033[0;37m" + "─" * empty + "\033[0m"
-    return bar
-
-
 def _render_download_ui(
     filename: str,
     vid_pct: float,
@@ -61,74 +53,58 @@ def _render_download_ui(
     aud_pct: float,
     aud_info: str,
 ) -> None:
-    """Render a clean download progress UI matching the app's style."""
+    """Render download progress UI. Simple fixed-row layout, no box borders."""
     import shutil
     w = shutil.get_terminal_size((80, 24)).columns
-    box_w = min(w - 4, 76)
-    pad = max((w - box_w) // 2, 1)
-    sp = " " * pad
-    bar_w = max(box_w - 20, 20)
+    bar_w = min(w - 12, 50)  # progress bar width
 
-    # ANSI codes
-    C = "\033[36m"      # cyan
+    # Colors
     CB = "\033[1;36m"   # bold cyan
     W = "\033[1;37m"    # bold white
     D = "\033[2m"       # dim
     G = "\033[1;32m"    # bold green
     R = "\033[0m"       # reset
-    HL = "─"
 
-    # Banner (compact)
-    banner = f"{CB} ╔═╗╔╦╗╦═╗╔═╗╔═╗╔╦╗╦  ╔═╗╔═╗╔╦╗{R}"
-    banner2 = f"{CB} ╚═╗ ║ ╠╦╝║╣ ╠═╣║║║║  ║ ║╠═╣ ║║{R}"
-    banner3 = f"{CB} ╚═╝ ╩ ╩╚═╚═╝╩ ╩╩ ╩╩═╝╚═╝╩ ╩═╩╝{R}"
-    banner_w = 34
-    bpad = max((w - banner_w) // 2, 0)
-    bsp = " " * bpad
+    def bar(pct: float) -> str:
+        filled = int(bar_w * pct / 100)
+        return CB + "━" * filled + D + "─" * (bar_w - filled) + R
 
-    # Title centered in box top
-    title = f" Download "
-    tl = (box_w - 2 - len(title)) // 2
-    tr = box_w - 2 - len(title) - tl
-    box_top = f"{sp}{C}╭{HL * tl}{R}{W}{title}{R}{C}{HL * tr}╮{R}"
-    box_bot = f"{sp}{C}╰{HL * (box_w - 2)}╯{R}"
-    box_empty = f"{sp}{C}│{R}{' ' * (box_w - 2)}{C}│{R}"
+    def center(text: str, visible_len: int) -> str:
+        pad = max((w - visible_len) // 2, 0)
+        return " " * pad + text
 
-    def box_line(content: str, raw_len: int = 0) -> str:
-        """Wrap content in box borders. raw_len = visible char count."""
-        if raw_len == 0:
-            raw_len = len(content)
-        inner = box_w - 4
-        padding = max(inner - raw_len, 0)
-        return f"{sp}{C}│{R}  {content}{' ' * padding}{C}│{R}"
+    # Banner
+    b1 = "╔═╗╔╦╗╦═╗╔═╗╔═╗╔╦╗╦  ╔═╗╔═╗╔╦╗"
+    b2 = "╚═╗ ║ ╠╦╝║╣ ╠═╣║║║║  ║ ║╠═╣ ║║"
+    b3 = "╚═╝ ╩ ╩╚═╚═╝╩ ╩╩ ╩╩═╝╚═╝╩ ╩═╩╝"
+    sep = CB + "─" * min(w - 2, 60) + R
 
-    # Video progress bar
-    vid_bar = _make_bar(vid_pct, bar_w)
-    vid_pct_str = f"{vid_pct:5.1f}%"
-
-    # Audio progress bar
-    aud_bar = _make_bar(aud_pct, bar_w)
-    aud_pct_str = f"{aud_pct:5.1f}%"
+    # Build video info line
+    vid_detail = vid_info.replace('\033[1;32m', G).replace('\033[0;36m', CB) if vid_info else ""
     aud_label = f"Audio ({aud_info})" if aud_info else "Audio"
 
-    # Build screen
-    out = "\033[?25l\033[2J\033[H\n"
-    out += f"{bsp}{banner}\n"
-    out += f"{bsp}{banner2}\n"
-    out += f"{bsp}{banner3}\n"
-    out += "\n"
-    out += f"{box_top}\n"
-    out += f"{box_empty}\n"
-    out += box_line(f"{W}{filename}{R}", len(filename)) + "\n"
-    out += f"{box_empty}\n"
-    out += box_line(f"{CB}Video{R}  {vid_bar} {W}{vid_pct_str}{R}", bar_w + 14) + "\n"
-    out += box_line(f"{D}{vid_info}{R}", len(vid_info.replace('\033[1;32m', '').replace('\033[0;36m', ''))) + "\n"
-    out += f"{box_empty}\n"
-    out += box_line(f"{CB}{aud_label}{R}  {aud_bar} {W}{aud_pct_str}{R}", bar_w + len(aud_label) + 10) + "\n"
-    out += f"{box_empty}\n"
-    out += box_line(f"{D}q: annulla{R}", 10) + "\n"
-    out += f"{box_empty}\n"
-    out += f"{box_bot}\n"
+    # Fixed rows using cursor positioning
+    out = "\033[?25l\033[2J\033[H"
+    out += f"\033[2;1H{center(CB + b1 + R, 34)}"
+    out += f"\033[3;1H{center(CB + b2 + R, 34)}"
+    out += f"\033[4;1H{center(CB + b3 + R, 34)}"
+    out += f"\033[6;1H{center(sep, min(w - 2, 60))}"
+    out += f"\033[8;1H{center(W + filename + R, len(filename))}"
+    out += f"\033[10;1H{center(sep, min(w - 2, 60))}"
+
+    # Video progress
+    vid_line = f"  {CB}Video{R}  {bar(vid_pct)}  {W}{vid_pct:5.1f}%{R}"
+    out += f"\033[12;1H{vid_line}"
+    if vid_detail:
+        out += f"\033[13;1H  {D}{vid_detail}{R}\033[K"
+
+    # Audio progress
+    aud_line = f"  {CB}{aud_label}{R}  {bar(aud_pct)}  {W}{aud_pct:5.1f}%{R}"
+    out += f"\033[15;1H{aud_line}"
+
+    # Separator + hint
+    out += f"\033[17;1H{center(sep, min(w - 2, 60))}"
+    out += f"\033[19;1H{center(D + 'q: annulla' + R, 10)}"
 
     sys.stdout.write(out)
     sys.stdout.flush()
