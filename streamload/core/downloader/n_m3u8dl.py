@@ -70,14 +70,30 @@ def _draw_download_screen(
     except curses.error:
         return
 
+    # Clear entire screen properly
     stdscr.erase()
+    for row in range(h):
+        try:
+            stdscr.move(row, 0)
+            stdscr.clrtoeol()
+        except curses.error:
+            pass
 
-    # Banner
-    banner = [
+    # Responsive banner (same as selector)
+    banner_large = [
+        "███████╗████████╗██████╗ ███████╗ █████╗ ███╗   ███╗██╗      ██████╗  █████╗ ██████╗ ",
+        "██╔════╝╚══██╔══╝██╔══██╗██╔════╝██╔══██╗████╗ ████║██║     ██╔═══██╗██╔══██╗██╔══██╗",
+        "███████╗   ██║   ██████╔╝█████╗  ███████║██╔████╔██║██║     ██║   ██║███████║██║  ██║",
+        "╚════██║   ██║   ██╔══██╗██╔══╝  ██╔══██║██║╚██╔╝██║██║     ██║   ██║██╔══██║██║  ██║",
+        "███████║   ██║   ██║  ██║███████╗██║  ██║██║ ╚═╝ ██║███████╗╚██████╔╝██║  ██║██████╔╝",
+        "╚══════╝   ╚═╝   ╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝╚═╝     ╚═╝╚══════╝ ╚═════╝ ╚═╝  ╚═╝╚═════╝ ",
+    ]
+    banner_compact = [
         "╔═╗╔╦╗╦═╗╔═╗╔═╗╔╦╗╦  ╔═╗╔═╗╔╦╗",
         "╚═╗ ║ ╠╦╝║╣ ╠═╣║║║║  ║ ║╠═╣ ║║",
         "╚═╝ ╩ ╩╚═╚═╝╩ ╩╩ ╩╩═╝╚═╝╩ ╩═╩╝",
     ]
+    banner = banner_large if w >= 90 else banner_compact
     for i, bline in enumerate(banner):
         x = max((w - len(bline)) // 2, 0)
         try:
@@ -85,10 +101,12 @@ def _draw_download_screen(
         except curses.error:
             pass
 
-    # Box
-    box_w = min(w - 4, 70)
-    box_x = max((w - box_w) // 2, 1)
-    bar_w = max(box_w - 22, 15)
+    banner_end = 1 + len(banner) + 1
+
+    # Box - keep everything well inside terminal width
+    box_w = min(w - 6, 68)
+    box_x = max((w - box_w) // 2, 2)
+    bar_w = max(box_w - 24, 10)
 
     def safe(y: int, x: int, text: str, attr: int = 0):
         try:
@@ -110,7 +128,7 @@ def _draw_download_screen(
     inner = box_w - 2
     tl = (inner - len(title)) // 2
     tr = inner - len(title) - tl
-    y = 5
+    y = banner_end
     safe(y, box_x, "╭" + "─" * tl, CYAN_B)
     safe(y, box_x + 1 + tl, title, WHITE_B)
     safe(y, box_x + 1 + tl + len(title), "─" * tr + "╮", CYAN_B)
