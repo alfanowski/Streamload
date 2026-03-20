@@ -53,61 +53,176 @@ def _render_download_ui(
     aud_pct: float,
     aud_info: str,
 ) -> None:
-    """Render download progress UI. Simple fixed-row layout, no box borders."""
-    import shutil
-    w = shutil.get_terminal_size((80, 24)).columns
-    bar_w = min(w - 12, 50)  # progress bar width
+    """Render download progress UI using curses for pixel-perfect alignment."""
+    import curses
 
-    # Colors
-    CB = "\033[1;36m"   # bold cyan
-    W = "\033[1;37m"    # bold white
-    D = "\033[2m"       # dim
-    G = "\033[1;32m"    # bold green
-    R = "\033[0m"       # reset
+    try:
+        stdscr = curses.initscr()
+        curses.noecho()
+        curses.cbreak()
+        curses.curs_set(0)
+        try:
+            curses.start_color()
+            curses.use_default_colors()
+            curses.init_pair(1, curses.COLOR_CYAN, -1)    # cyan
+            curses.init_pair(2, curses.COLOR_WHITE, -1)    # white
+            curses.init_pair(3, curses.COLOR_GREEN, -1)    # green
+        except curses.error:
+            pass
 
-    def bar(pct: float) -> str:
-        filled = int(bar_w * pct / 100)
-        return CB + "━" * filled + D + "─" * (bar_w - filled) + R
+        h, w = stdscr.getmaxyx()
 
-    def center(text: str, visible_len: int) -> str:
-        pad = max((w - visible_len) // 2, 0)
-        return " " * pad + text
+        CYAN = curses.color_pair(1)
+        CYAN_B = curses.color_pair(1) | curses.A_BOLD
+        WHITE_B = curses.color_pair(2) | curses.A_BOLD
+        GREEN_B = curses.color_pair(3) | curses.A_BOLD
+        DIM = curses.A_DIM
 
-    # Banner
-    b1 = "╔═╗╔╦╗╦═╗╔═╗╔═╗╔╦╗╦  ╔═╗╔═╗╔╦╗"
-    b2 = "╚═╗ ║ ╠╦╝║╣ ╠═╣║║║║  ║ ║╠═╣ ║║"
-    b3 = "╚═╝ ╩ ╩╚═╚═╝╩ ╩╩ ╩╩═╝╚═╝╩ ╩═╩╝"
-    sep = CB + "─" * min(w - 2, 60) + R
+        stdscr.erase()
 
-    # Build video info line
-    vid_detail = vid_info.replace('\033[1;32m', G).replace('\033[0;36m', CB) if vid_info else ""
-    aud_label = f"Audio ({aud_info})" if aud_info else "Audio"
+        # Banner centered
+        banner = [
+            "╔═╗╔╦╗╦═╗╔═╗╔═╗╔╦╗╦  ╔═╗╔═╗╔╦╗",
+            "╚═╗ ║ ╠╦╝║╣ ╠═╣║║║║  ║ ║╠═╣ ║║",
+            "╚═╝ ╩ ╩╚═╚═╝╩ ╩╩ ╩╩═╝╚═╝╩ ╩═╩╝",
+        ]
+        for i, line in enumerate(banner):
+            x = max((w - len(line)) // 2, 0)
+            try:
+                stdscr.addstr(1 + i, x, line, CYAN_B)
+            except curses.error:
+                pass
 
-    # Fixed rows using cursor positioning
-    out = "\033[?25l\033[2J\033[H"
-    out += f"\033[2;1H{center(CB + b1 + R, 34)}"
-    out += f"\033[3;1H{center(CB + b2 + R, 34)}"
-    out += f"\033[4;1H{center(CB + b3 + R, 34)}"
-    out += f"\033[6;1H{center(sep, min(w - 2, 60))}"
-    out += f"\033[8;1H{center(W + filename + R, len(filename))}"
-    out += f"\033[10;1H{center(sep, min(w - 2, 60))}"
+        # Box dimensions
+        box_w = min(w - 4, 70)
+        box_x = max((w - box_w) // 2, 1)
+        box_y = 5
+        bar_w = max(box_w - 22, 15)
 
-    # Video progress
-    vid_line = f"  {CB}Video{R}  {bar(vid_pct)}  {W}{vid_pct:5.1f}%{R}"
-    out += f"\033[12;1H{vid_line}"
-    if vid_detail:
-        out += f"\033[13;1H  {D}{vid_detail}{R}\033[K"
+        def draw_box_top(y: int, title: str) -> int:
+            inner = box_w - 2
+            t = f" {title} "
+            tl = (inner - len(t)) // 2
+            tr = inner - len(t) - tl
+            try:
+                stdscr.addstr(y, box_x, "╭" + "─" * tl, CYAN_B)
+                stdscr.addstr(y, box_x + 1 + tl, t, WHITE_B)
+                stdscr.addstr(y, box_x + 1 + tl + len(t), "─" * tr + "╮", CYAN_B)
+            except curses.error:
+                pass
+            return y + 1
 
-    # Audio progress
-    aud_line = f"  {CB}{aud_label}{R}  {bar(aud_pct)}  {W}{aud_pct:5.1f}%{R}"
-    out += f"\033[15;1H{aud_line}"
+        def draw_box_bot(y: int) -> int:
+            try:
+                stdscr.addstr(y, box_x, "╰" + "─" * (box_w - 2) + "╯", CYAN_B)
+            except curses.error:
+                pass
+            return y + 1
 
-    # Separator + hint
-    out += f"\033[17;1H{center(sep, min(w - 2, 60))}"
-    out += f"\033[19;1H{center(D + 'q: annulla' + R, 10)}"
+        def draw_box_empty(y: int) -> int:
+            try:
+                stdscr.addstr(y, box_x, "│", CYAN)
+                stdscr.addstr(y, box_x + box_w - 1, "│", CYAN)
+            except curses.error:
+                pass
+            return y + 1
 
-    sys.stdout.write(out)
-    sys.stdout.flush()
+        def draw_bar(y: int, x_start: int, pct: float, bw: int):
+            filled = int(bw * pct / 100)
+            try:
+                stdscr.addstr(y, x_start, "━" * filled, CYAN_B)
+                stdscr.addstr(y, x_start + filled, "─" * (bw - filled), DIM)
+            except curses.error:
+                pass
+
+        y = draw_box_top(box_y, "Download")
+        y = draw_box_empty(y)
+
+        # Filename
+        fn_x = box_x + max((box_w - len(filename)) // 2, 2)
+        try:
+            stdscr.addstr(y, box_x, "│", CYAN)
+            stdscr.addstr(y, fn_x, filename[:box_w - 4], WHITE_B)
+            stdscr.addstr(y, box_x + box_w - 1, "│", CYAN)
+        except curses.error:
+            pass
+        y += 1
+        y = draw_box_empty(y)
+
+        # Video progress
+        try:
+            stdscr.addstr(y, box_x, "│", CYAN)
+            stdscr.addstr(y, box_x + 3, "Video", CYAN_B)
+            draw_bar(y, box_x + 10, vid_pct, bar_w)
+            pct_str = f"{vid_pct:5.1f}%"
+            stdscr.addstr(y, box_x + 11 + bar_w, pct_str, WHITE_B)
+            stdscr.addstr(y, box_x + box_w - 1, "│", CYAN)
+        except curses.error:
+            pass
+        y += 1
+
+        # Video detail line
+        try:
+            stdscr.addstr(y, box_x, "│", CYAN)
+            # Clean ANSI from vid_info
+            clean_info = re.sub(r'\033\[[^m]*m', '', vid_info)
+            # Parse parts
+            parts = clean_info.strip().split()
+            info_x = box_x + 10
+            for part in parts:
+                if part.endswith("ps") or part.endswith("Bps"):
+                    stdscr.addstr(y, info_x, part, GREEN_B)
+                elif part.startswith("ETA"):
+                    stdscr.addstr(y, info_x, part, DIM)
+                else:
+                    stdscr.addstr(y, info_x, part, DIM)
+                info_x += len(part) + 1
+            stdscr.addstr(y, box_x + box_w - 1, "│", CYAN)
+        except curses.error:
+            pass
+        y += 1
+        y = draw_box_empty(y)
+
+        # Audio progress
+        aud_label = f"Audio ({aud_info})" if aud_info else "Audio"
+        try:
+            stdscr.addstr(y, box_x, "│", CYAN)
+            stdscr.addstr(y, box_x + 3, aud_label, CYAN_B)
+            aud_bar_x = box_x + 4 + len(aud_label)
+            draw_bar(y, aud_bar_x, aud_pct, bar_w)
+            pct_str = f"{aud_pct:5.1f}%"
+            stdscr.addstr(y, aud_bar_x + bar_w + 1, pct_str, WHITE_B)
+            stdscr.addstr(y, box_x + box_w - 1, "│", CYAN)
+        except curses.error:
+            pass
+        y += 1
+        y = draw_box_empty(y)
+
+        # Hint
+        try:
+            stdscr.addstr(y, box_x, "│", CYAN)
+            hint = "q: annulla"
+            stdscr.addstr(y, box_x + box_w - 2 - len(hint), hint, DIM)
+            stdscr.addstr(y, box_x + box_w - 1, "│", CYAN)
+        except curses.error:
+            pass
+        y += 1
+        y = draw_box_empty(y)
+        draw_box_bot(y)
+
+        stdscr.refresh()
+        curses.endwin()
+
+        # Re-enter alternate screen (curses.endwin exits it)
+        sys.stdout.write("\033[?1049h")
+        sys.stdout.flush()
+
+    except Exception:
+        # If curses fails, just clear and show minimal text
+        try:
+            curses.endwin()
+        except Exception:
+            pass
 
 
 def _get_platform_asset_pattern() -> str:
