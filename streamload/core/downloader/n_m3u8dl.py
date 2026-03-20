@@ -46,6 +46,94 @@ def _extract_field(text: str, pattern: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _make_bar(pct: float, width: int) -> str:
+    """Create a Unicode progress bar."""
+    filled = int(width * pct / 100)
+    empty = width - filled
+    bar = "\033[1;36m" + "━" * filled + "\033[0;37m" + "─" * empty + "\033[0m"
+    return bar
+
+
+def _render_download_ui(
+    filename: str,
+    vid_pct: float,
+    vid_info: str,
+    aud_pct: float,
+    aud_info: str,
+) -> None:
+    """Render a clean download progress UI matching the app's style."""
+    import shutil
+    w = shutil.get_terminal_size((80, 24)).columns
+    box_w = min(w - 4, 76)
+    pad = max((w - box_w) // 2, 1)
+    sp = " " * pad
+    bar_w = max(box_w - 20, 20)
+
+    # ANSI codes
+    C = "\033[36m"      # cyan
+    CB = "\033[1;36m"   # bold cyan
+    W = "\033[1;37m"    # bold white
+    D = "\033[2m"       # dim
+    G = "\033[1;32m"    # bold green
+    R = "\033[0m"       # reset
+    HL = "─"
+
+    # Banner (compact)
+    banner = f"{CB} ╔═╗╔╦╗╦═╗╔═╗╔═╗╔╦╗╦  ╔═╗╔═╗╔╦╗{R}"
+    banner2 = f"{CB} ╚═╗ ║ ╠╦╝║╣ ╠═╣║║║║  ║ ║╠═╣ ║║{R}"
+    banner3 = f"{CB} ╚═╝ ╩ ╩╚═╚═╝╩ ╩╩ ╩╩═╝╚═╝╩ ╩═╩╝{R}"
+    banner_w = 34
+    bpad = max((w - banner_w) // 2, 0)
+    bsp = " " * bpad
+
+    # Title centered in box top
+    title = f" Download "
+    tl = (box_w - 2 - len(title)) // 2
+    tr = box_w - 2 - len(title) - tl
+    box_top = f"{sp}{C}╭{HL * tl}{R}{W}{title}{R}{C}{HL * tr}╮{R}"
+    box_bot = f"{sp}{C}╰{HL * (box_w - 2)}╯{R}"
+    box_empty = f"{sp}{C}│{R}{' ' * (box_w - 2)}{C}│{R}"
+
+    def box_line(content: str, raw_len: int = 0) -> str:
+        """Wrap content in box borders. raw_len = visible char count."""
+        if raw_len == 0:
+            raw_len = len(content)
+        inner = box_w - 4
+        padding = max(inner - raw_len, 0)
+        return f"{sp}{C}│{R}  {content}{' ' * padding}{C}│{R}"
+
+    # Video progress bar
+    vid_bar = _make_bar(vid_pct, bar_w)
+    vid_pct_str = f"{vid_pct:5.1f}%"
+
+    # Audio progress bar
+    aud_bar = _make_bar(aud_pct, bar_w)
+    aud_pct_str = f"{aud_pct:5.1f}%"
+    aud_label = f"Audio ({aud_info})" if aud_info else "Audio"
+
+    # Build screen
+    out = "\033[?25l\033[2J\033[H\n"
+    out += f"{bsp}{banner}\n"
+    out += f"{bsp}{banner2}\n"
+    out += f"{bsp}{banner3}\n"
+    out += "\n"
+    out += f"{box_top}\n"
+    out += f"{box_empty}\n"
+    out += box_line(f"{W}{filename}{R}", len(filename)) + "\n"
+    out += f"{box_empty}\n"
+    out += box_line(f"{CB}Video{R}  {vid_bar} {W}{vid_pct_str}{R}", bar_w + 14) + "\n"
+    out += box_line(f"{D}{vid_info}{R}", len(vid_info.replace('\033[1;32m', '').replace('\033[0;36m', ''))) + "\n"
+    out += f"{box_empty}\n"
+    out += box_line(f"{CB}{aud_label}{R}  {aud_bar} {W}{aud_pct_str}{R}", bar_w + len(aud_label) + 10) + "\n"
+    out += f"{box_empty}\n"
+    out += box_line(f"{D}q: annulla{R}", 10) + "\n"
+    out += f"{box_empty}\n"
+    out += f"{box_bot}\n"
+
+    sys.stdout.write(out)
+    sys.stdout.flush()
+
+
 def _get_platform_asset_pattern() -> str:
     """Return a regex pattern matching the correct release asset for this OS."""
     system = platform.system().lower()
@@ -230,13 +318,6 @@ class N_m3u8dlDownloader:
         log.info("N_m3u8DL-RE command: %s", " ".join(cmd))
 
         try:
-            # Clear screen and show download header
-            sys.stdout.write("\033[2J\033[H")
-            sys.stdout.write(f"\n  \033[1;36mDownloading: {filename}\033[0m\n\n")
-            sys.stdout.flush()
-
-            # Pipe N_m3u8DL-RE output and show clean single-line progress.
-            # Direct stdout causes garbled multi-line ANSI rendering.
             proc = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
@@ -247,41 +328,37 @@ class N_m3u8dlDownloader:
                 bufsize=1,
             )
 
-            last_vid = ""
-            last_aud = ""
+            vid_pct = 0.0
+            aud_pct = 0.0
+            vid_info = ""
+            aud_info = ""
+            _render_download_ui(filename, vid_pct, vid_info, aud_pct, aud_info)
+
             for raw_line in proc.stdout:
                 line = raw_line.strip()
                 if not line:
                     continue
 
-                # Parse N_m3u8DL-RE progress lines
-                # Format: "Vid 1920x1080 | 4500 Kbps ━━━━ 29/1751 1.66% 33.00MB/2.09GB 3.24MBps 00:20:01"
-                # Format: "Aud Italian | ita ━━━━ 84/1751 4.80% 7.03MB/166.28MB 968.61KBps 00:06:43"
                 if line.startswith("Vid"):
-                    # Extract key info
                     pct = _extract_field(line, r"([\d.]+)%")
                     size = _extract_field(line, r"([\d.]+\w+/[\d.]+\w+)")
                     speed = _extract_field(line, r"([\d.]+\w+ps)")
                     eta = _extract_field(line, r"(\d+:\d+:\d+)")
-                    segs = _extract_field(line, r"(\d+/\d+)")
-                    last_vid = f"Video: {pct or '?'}% {size or ''} {speed or ''} ETA {eta or '--:--:--'} [{segs or ''}]"
+                    if pct:
+                        vid_pct = float(pct)
+                    vid_info = f"{size or ''} \033[1;32m{speed or ''}\033[0;36m ETA {eta or '--:--:--'}"
                 elif line.startswith("Aud"):
-                    lang = _extract_field(line, r"Aud\s+(\w+)")
                     pct = _extract_field(line, r"([\d.]+)%")
-                    segs = _extract_field(line, r"(\d+/\d+)")
-                    last_aud = f"Audio ({lang or '?'}): {pct or '?'}% [{segs or ''}]"
+                    lang = _extract_field(line, r"Aud\s+(\w+)")
+                    if pct:
+                        aud_pct = float(pct)
+                    aud_info = lang or ""
 
-                # Display clean 2-line progress
-                if last_vid:
-                    sys.stdout.write(f"\033[4;1H\033[K  \033[1;37m{last_vid}\033[0m")
-                if last_aud:
-                    sys.stdout.write(f"\033[5;1H\033[K  \033[0;37m{last_aud}\033[0m")
-                sys.stdout.flush()
+                _render_download_ui(filename, vid_pct, vid_info, aud_pct, aud_info)
 
             proc.wait()
 
-            # Clear after completion
-            sys.stdout.write("\033[2J\033[H")
+            sys.stdout.write("\033[2J\033[H\033[?25h")
             sys.stdout.flush()
 
             if proc.returncode != 0:
