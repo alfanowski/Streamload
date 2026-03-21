@@ -733,6 +733,14 @@ class N_m3u8dlDownloader:
 
             proc.wait()
 
+            # Show merge phase while ffmpeg processes (N_m3u8DL-RE may run
+            # ffmpeg internally for binary-merge, title bar shows ffmpeg)
+            if not cancelled and proc.returncode == 0:
+                _draw_download_screen(
+                    stdscr, filename, 100.0, vid_size,
+                    "Merge...", "", 100.0, aud_info,
+                )
+
             if cancelled:
                 log.info("Download cancelled by user")
                 # Show cancelled message briefly
@@ -779,6 +787,11 @@ class N_m3u8dlDownloader:
             )
 
             # Mux video + audio with ffmpeg for proper sync
+            _draw_download_screen(
+                stdscr, filename, 100.0, "",
+                "Merge tracce...", "", 100.0, aud_info,
+            )
+
             result_path = None
             if video_file:
                 if audio_files:
