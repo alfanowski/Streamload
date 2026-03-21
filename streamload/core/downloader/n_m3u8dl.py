@@ -874,10 +874,17 @@ class N_m3u8dlDownloader:
         for key, value in extra_headers.items():
             cmd.extend(["--header", f"{key}: {value}"])
 
-        # Threading - use at least 16 threads for speed
-        thread_count = max(self._config.thread_count, 16)
+        # Threading - enough for speed but not so many that CDN rate-limits
+        thread_count = max(self._config.thread_count, 8)
         cmd.extend(["--thread-count", str(thread_count)])
-        cmd.append("--concurrent-download")
+
+        # Do NOT use --concurrent-download. Downloading video and audio
+        # simultaneously causes audio to stall on VixCloud CDN due to
+        # rate limiting (too many connections). Sequential download is
+        # more reliable - video first, then audio.
+
+        # Request timeout - prevent individual segments from hanging forever
+        cmd.extend(["--http-request-timeout", "15"])
 
         # Retry
         if self._config.retry_count > 0:
