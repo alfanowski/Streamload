@@ -46,6 +46,79 @@ def _extract_field(text: str, pattern: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _ffmpeg_merge(
+    ffmpeg: str,
+    video: Path,
+    audios: list[Path],
+    output: Path,
+) -> Path | None:
+    """Merge video + audio files with ffmpeg, ensuring proper A/V sync.
+
+    Uses -avoid_negative_ts make_zero to reset timestamps and prevent
+    audio desync that occurs with raw binary-merged HLS segments.
+    """
+    cmd = [ffmpeg, "-y"]
+
+    # Input files
+    cmd.extend(["-i", str(video)])
+    for af in audios:
+        cmd.extend(["-i", str(af)])
+
+    # Map video from first input
+    cmd.extend(["-map", "0:v:0"])
+
+    # Map audio from each additional input
+    for i in range(len(audios)):
+        cmd.extend(["-map", f"{i + 1}:a:0"])
+
+    # Copy codecs (no re-encoding)
+    cmd.extend(["-c", "copy"])
+
+    # Critical sync flags
+    cmd.extend([
+        "-avoid_negative_ts", "make_zero",  # Reset negative timestamps
+        "-fflags", "+genpts",               # Generate presentation timestamps
+        "-async", "1",                       # Sync audio to nearest video frame
+    ])
+
+    cmd.append(str(output))
+
+    log.info("FFmpeg merge: %s", " ".join(cmd))
+    try:
+        result = subprocess.run(
+            cmd,
+            capture_output=True,
+            text=True,
+            timeout=600,
+        )
+        if result.returncode == 0 and output.exists():
+            log.info("FFmpeg merge successful: %s (%d bytes)", output, output.stat().st_size)
+            return output
+        else:
+            log.error("FFmpeg merge failed (code %d): %s", result.returncode, result.stderr[-500:] if result.stderr else "")
+            return None
+    except Exception as exc:
+        log.error("FFmpeg merge error: %s", exc)
+        return None
+
+
+def _ffmpeg_remux(ffmpeg: str, input_path: Path, output: Path) -> bool:
+    """Remux a .ts file to .mkv container."""
+    cmd = [
+        ffmpeg, "-y",
+        "-i", str(input_path),
+        "-c", "copy",
+        "-avoid_negative_ts", "make_zero",
+        "-fflags", "+genpts",
+        str(output),
+    ]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        return result.returncode == 0 and output.exists()
+    except Exception:
+        return False
+
+
 def _format_size(size_bytes: int) -> str:
     """Format bytes to human-readable."""
     if size_bytes >= 1024 ** 3:
@@ -612,17 +685,60 @@ class N_m3u8dlDownloader:
                 sys.stdout.flush()
                 return None
 
-            # Find the output file
+            # Find output files - binary-merge produces separate video + audio files
+            # e.g. "filename.ts" (video) + "filename.Italian.ts" (audio)
+            video_file = None
+            audio_files = []
+
+            for f in sorted(output_dir.iterdir()):
+                if not f.is_file():
+                    continue
+                fname = f.name
+                stem = f.stem
+                # Skip temp/hidden files
+                if fname.startswith("."):
+                    continue
+
+                if stem == filename and f.suffix in (".ts", ".mp4", ".m4v", ".mkv"):
+                    video_file = f
+                elif fname.startswith(filename + ".") and f.suffix in (".ts", ".m4a", ".aac", ".mp4"):
+                    # Audio files: "filename.Italian.ts", "filename.English.ts"
+                    if stem != filename:
+                        audio_files.append(f)
+
+            log.info(
+                "N_m3u8DL-RE output: video=%s, audio=%s",
+                video_file, [f.name for f in audio_files],
+            )
+
+            # Mux video + audio with ffmpeg for proper sync
             result_path = None
-            for ext in (".mkv", ".ts", ".mp4", ".m4a"):
-                candidate = output_dir / f"{filename}{ext}"
-                if candidate.exists():
-                    result_path = candidate
-                    break
+            if video_file:
+                if audio_files:
+                    # Merge with ffmpeg using proper sync flags
+                    result_path = _ffmpeg_merge(
+                        self._ffmpeg, video_file, audio_files,
+                        output_dir / f"{filename}.mkv",
+                    )
+                    # Clean up source files after successful merge
+                    if result_path and result_path.exists():
+                        video_file.unlink(missing_ok=True)
+                        for af in audio_files:
+                            af.unlink(missing_ok=True)
+                else:
+                    # No separate audio - audio is embedded in video
+                    result_path = video_file
+                    # Rename to .mkv if it's .ts
+                    if result_path.suffix == ".ts":
+                        mkv_path = result_path.with_suffix(".mkv")
+                        _ffmpeg_remux(self._ffmpeg, result_path, mkv_path)
+                        result_path.unlink(missing_ok=True)
+                        result_path = mkv_path
 
             if result_path is None:
+                # Fallback: look for any file matching filename
                 for f in output_dir.iterdir():
-                    if f.stem == filename and f.is_file():
+                    if f.stem == filename and f.is_file() and not f.name.startswith("."):
                         result_path = f
                         break
 
@@ -679,10 +795,10 @@ class N_m3u8dlDownloader:
             "--save-dir", str(output_dir),
             "--tmp-dir", str(tmp_dir),
             "--ffmpeg-binary-path", self._ffmpeg,
+            "--binary-merge",
             "--del-after-done",
             "--auto-subtitle-fix", "false",
             "--check-segments-count", "false",
-            "--mux-after-done", "format=mkv",
             "--mp4-real-time-decryption", "false",
             "--no-log",
         ]
