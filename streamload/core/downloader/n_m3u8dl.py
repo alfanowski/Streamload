@@ -46,33 +46,44 @@ def _extract_field(text: str, pattern: str) -> str | None:
     return m.group(1) if m else None
 
 
-def _fix_ts_timestamps(ffmpeg: str, ts_path: Path) -> Path:
-    """Convert .ts to .mp4 to regenerate clean timestamps.
+def _get_duration(ffmpeg: str, file_path: Path) -> float:
+    """Get media duration in seconds using ffmpeg."""
+    cmd = [ffmpeg, "-i", str(file_path), "-f", "null", "-"]
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        # Parse duration from stderr: "Duration: 01:32:15.44"
+        m = re.search(r"Duration:\s*(\d+):(\d+):([\d.]+)", result.stderr)
+        if m:
+            return int(m.group(1)) * 3600 + int(m.group(2)) * 60 + float(m.group(3))
+    except Exception:
+        pass
+    return 0.0
 
-    VibraVid's approach: raw binary-merged .ts files often have broken
-    or unset PTS/DTS timestamps. Converting to .mp4 with genpts+igndts
-    forces ffmpeg to rebuild all timestamps from scratch.
 
-    Returns path to the fixed .mp4 file (or the original if conversion fails).
+def _fix_ts_audio(ffmpeg: str, ts_path: Path) -> Path:
+    """Convert audio .ts to .m4a with timestamp regeneration.
+
+    Exact same approach as VibraVid: uses genpts+igndts+discardcorrupt
+    to rebuild timestamps from scratch. Outputs .m4a (not .mp4).
     """
-    mp4_path = ts_path.with_suffix(".mp4")
+    m4a_path = ts_path.with_suffix(".m4a")
     cmd = [
         ffmpeg, "-y",
         "-fflags", "+genpts+igndts+discardcorrupt",
         "-avoid_negative_ts", "make_zero",
+        "-f", "mpegts",
         "-i", str(ts_path),
         "-c", "copy",
-        str(mp4_path),
+        str(m4a_path),
     ]
-    log.info("Fixing timestamps: %s -> %s", ts_path.name, mp4_path.name)
+    log.info("Fixing audio timestamps: %s -> %s", ts_path.name, m4a_path.name)
     try:
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
-        if result.returncode == 0 and mp4_path.exists() and mp4_path.stat().st_size > 0:
+        if result.returncode == 0 and m4a_path.exists() and m4a_path.stat().st_size > 0:
             ts_path.unlink(missing_ok=True)
-            return mp4_path
+            return m4a_path
     except Exception as exc:
-        log.warning("Timestamp fix failed for %s: %s", ts_path.name, exc)
-
+        log.warning("Audio timestamp fix failed for %s: %s", ts_path.name, exc)
     return ts_path
 
 
@@ -82,49 +93,75 @@ def _ffmpeg_merge(
     audios: list[Path],
     output: Path,
 ) -> Path | None:
-    """Merge video + audio files with ffmpeg, ensuring proper A/V sync.
+    """Merge video + audio with ffmpeg. Exact VibraVid approach:
 
-    Pipeline (same as VibraVid):
-    1. Fix timestamps on all .ts inputs by converting to .mp4
-    2. Merge with -c copy into final .mkv
+    1. Fix audio .ts timestamps by converting to .m4a
+    2. Check duration difference between video and each audio
+    3. Use -f mpegts for .ts inputs (critical for correct parsing)
+    4. Use -shortest if duration differs by more than 3 seconds
+    5. Use -c copy (no re-encoding) with PARAM_FINAL defaults
     """
-    # Step 1: Fix timestamps on all inputs
-    video = _fix_ts_timestamps(ffmpeg, video)
-    audios = [_fix_ts_timestamps(ffmpeg, a) for a in audios]
+    # Step 1: Fix audio timestamps
+    fixed_audios = []
+    for a in audios:
+        if a.suffix.lower() == ".ts":
+            fixed_audios.append(_fix_ts_audio(ffmpeg, a))
+        else:
+            fixed_audios.append(a)
 
-    # Step 2: Merge with clean timestamps
+    # Step 2: Check duration differences
+    use_shortest = False
+    vid_duration = _get_duration(ffmpeg, video)
+    for af in fixed_audios:
+        aud_duration = _get_duration(ffmpeg, af)
+        diff = abs(vid_duration - aud_duration)
+        log.info("Duration check: video=%.1fs audio=%.1fs diff=%.1fs (%s)",
+                 vid_duration, aud_duration, diff, af.name)
+        if diff > 3.0:
+            use_shortest = True
+            log.info("Duration diff > 3s, will use -shortest")
+
+    # Step 3: Build merge command
     cmd = [ffmpeg, "-y"]
 
-    # Inputs
+    # Video input - force mpegts parser for .ts files
+    if video.suffix.lower() == ".ts":
+        cmd.extend(["-f", "mpegts"])
     cmd.extend(["-i", str(video)])
-    for af in audios:
+
+    # Audio inputs - force mpegts parser for .ts files
+    for af in fixed_audios:
+        if af.suffix.lower() == ".ts":
+            cmd.extend(["-f", "mpegts"])
         cmd.extend(["-i", str(af)])
 
     # Map streams
-    cmd.extend(["-map", "0:v:0"])
-    for i in range(len(audios)):
-        cmd.extend(["-map", f"{i + 1}:a:0"])
+    cmd.extend(["-map", "0:v"])
+    for i in range(len(fixed_audios)):
+        cmd.extend(["-map", f"{i + 1}:a"])
 
-    # Copy codecs, no re-encoding
+    # Copy codecs (no re-encoding) - same as VibraVid PARAM_FINAL default
     cmd.extend(["-c", "copy"])
 
-    cmd.append(str(output))
+    # Use -shortest if duration mismatch detected
+    if use_shortest:
+        cmd.extend(["-shortest", "-strict", "experimental"])
+
+    cmd.extend([str(output), "-y"])
 
     log.info("FFmpeg merge: %s", " ".join(cmd))
     try:
-        result = subprocess.run(
-            cmd, capture_output=True, text=True, timeout=600,
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if result.returncode == 0 and output.exists():
-            # Cleanup intermediate mp4 files
+            # Cleanup source files
             video.unlink(missing_ok=True)
-            for af in audios:
+            for af in fixed_audios:
                 af.unlink(missing_ok=True)
             log.info("FFmpeg merge OK: %s (%d bytes)", output, output.stat().st_size)
             return output
         else:
-            log.error("FFmpeg merge failed (code %d): %s",
-                       result.returncode, result.stderr[-500:] if result.stderr else "")
+            log.error("FFmpeg merge failed (code %d):\n%s",
+                       result.returncode, result.stderr[-800:] if result.stderr else "")
             return None
     except Exception as exc:
         log.error("FFmpeg merge error: %s", exc)
@@ -132,11 +169,12 @@ def _ffmpeg_merge(
 
 
 def _ffmpeg_remux(ffmpeg: str, input_path: Path, output: Path) -> bool:
-    """Remux a .ts file to .mkv with timestamp regeneration."""
+    """Remux a single .ts file to .mkv with timestamp regeneration."""
     cmd = [
         ffmpeg, "-y",
         "-fflags", "+genpts+igndts+discardcorrupt",
         "-avoid_negative_ts", "make_zero",
+        "-f", "mpegts",
         "-i", str(input_path),
         "-c", "copy",
         str(output),
