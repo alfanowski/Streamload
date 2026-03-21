@@ -1490,9 +1490,9 @@ class InteractiveSelector:
 
         # Version / tagline
         if self._version:
-            ver_text = f"v{self._version}  |  Professional Media Downloader"
+            ver_text = f"v{self._version}  |  by alfanowski"
         else:
-            ver_text = "Professional Media Downloader"
+            ver_text = "by alfanowski"
         ver_pad = (width - len(ver_text)) // 2
         self._safe_addstr(y, max(ver_pad, 0), ver_text, self._attr_dim())
         y += 1
