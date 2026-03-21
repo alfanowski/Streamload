@@ -46,6 +46,36 @@ def _extract_field(text: str, pattern: str) -> str | None:
     return m.group(1) if m else None
 
 
+def _fix_ts_timestamps(ffmpeg: str, ts_path: Path) -> Path:
+    """Convert .ts to .mp4 to regenerate clean timestamps.
+
+    VibraVid's approach: raw binary-merged .ts files often have broken
+    or unset PTS/DTS timestamps. Converting to .mp4 with genpts+igndts
+    forces ffmpeg to rebuild all timestamps from scratch.
+
+    Returns path to the fixed .mp4 file (or the original if conversion fails).
+    """
+    mp4_path = ts_path.with_suffix(".mp4")
+    cmd = [
+        ffmpeg, "-y",
+        "-fflags", "+genpts+igndts+discardcorrupt",
+        "-avoid_negative_ts", "make_zero",
+        "-i", str(ts_path),
+        "-c", "copy",
+        str(mp4_path),
+    ]
+    log.info("Fixing timestamps: %s -> %s", ts_path.name, mp4_path.name)
+    try:
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=300)
+        if result.returncode == 0 and mp4_path.exists() and mp4_path.stat().st_size > 0:
+            ts_path.unlink(missing_ok=True)
+            return mp4_path
+    except Exception as exc:
+        log.warning("Timestamp fix failed for %s: %s", ts_path.name, exc)
+
+    return ts_path
+
+
 def _ffmpeg_merge(
     ffmpeg: str,
     video: Path,
@@ -54,48 +84,47 @@ def _ffmpeg_merge(
 ) -> Path | None:
     """Merge video + audio files with ffmpeg, ensuring proper A/V sync.
 
-    Uses -avoid_negative_ts make_zero to reset timestamps and prevent
-    audio desync that occurs with raw binary-merged HLS segments.
+    Pipeline (same as VibraVid):
+    1. Fix timestamps on all .ts inputs by converting to .mp4
+    2. Merge with -c copy into final .mkv
     """
+    # Step 1: Fix timestamps on all inputs
+    video = _fix_ts_timestamps(ffmpeg, video)
+    audios = [_fix_ts_timestamps(ffmpeg, a) for a in audios]
+
+    # Step 2: Merge with clean timestamps
     cmd = [ffmpeg, "-y"]
 
-    # Input files
+    # Inputs
     cmd.extend(["-i", str(video)])
     for af in audios:
         cmd.extend(["-i", str(af)])
 
-    # Map video from first input
+    # Map streams
     cmd.extend(["-map", "0:v:0"])
-
-    # Map audio from each additional input
     for i in range(len(audios)):
         cmd.extend(["-map", f"{i + 1}:a:0"])
 
-    # Copy codecs (no re-encoding)
+    # Copy codecs, no re-encoding
     cmd.extend(["-c", "copy"])
-
-    # Critical sync flags
-    cmd.extend([
-        "-avoid_negative_ts", "make_zero",  # Reset negative timestamps
-        "-fflags", "+genpts",               # Generate presentation timestamps
-        "-async", "1",                       # Sync audio to nearest video frame
-    ])
 
     cmd.append(str(output))
 
     log.info("FFmpeg merge: %s", " ".join(cmd))
     try:
         result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            timeout=600,
+            cmd, capture_output=True, text=True, timeout=600,
         )
         if result.returncode == 0 and output.exists():
-            log.info("FFmpeg merge successful: %s (%d bytes)", output, output.stat().st_size)
+            # Cleanup intermediate mp4 files
+            video.unlink(missing_ok=True)
+            for af in audios:
+                af.unlink(missing_ok=True)
+            log.info("FFmpeg merge OK: %s (%d bytes)", output, output.stat().st_size)
             return output
         else:
-            log.error("FFmpeg merge failed (code %d): %s", result.returncode, result.stderr[-500:] if result.stderr else "")
+            log.error("FFmpeg merge failed (code %d): %s",
+                       result.returncode, result.stderr[-500:] if result.stderr else "")
             return None
     except Exception as exc:
         log.error("FFmpeg merge error: %s", exc)
@@ -103,13 +132,13 @@ def _ffmpeg_merge(
 
 
 def _ffmpeg_remux(ffmpeg: str, input_path: Path, output: Path) -> bool:
-    """Remux a .ts file to .mkv container."""
+    """Remux a .ts file to .mkv with timestamp regeneration."""
     cmd = [
         ffmpeg, "-y",
+        "-fflags", "+genpts+igndts+discardcorrupt",
+        "-avoid_negative_ts", "make_zero",
         "-i", str(input_path),
         "-c", "copy",
-        "-avoid_negative_ts", "make_zero",
-        "-fflags", "+genpts",
         str(output),
     ]
     try:
@@ -720,11 +749,7 @@ class N_m3u8dlDownloader:
                         self._ffmpeg, video_file, audio_files,
                         output_dir / f"{filename}.mkv",
                     )
-                    # Clean up source files after successful merge
-                    if result_path and result_path.exists():
-                        video_file.unlink(missing_ok=True)
-                        for af in audio_files:
-                            af.unlink(missing_ok=True)
+                    # Source files are cleaned up inside _ffmpeg_merge
                 else:
                     # No separate audio - audio is embedded in video
                     result_path = video_file
