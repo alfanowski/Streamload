@@ -43,6 +43,10 @@ class DomainCache:
         data = self._read()
         return data.get("entries", {}).get(short_name)
 
+    def entries(self) -> dict[str, dict[str, Any]]:
+        """Return all cached entries as a copy (safe to iterate without locking)."""
+        return dict(self._read().get("entries", {}))
+
     def is_fresh(self, short_name: str, *, ttl_seconds: int, now: float | None = None) -> bool:
         entry = self.get(short_name)
         if entry is None:
