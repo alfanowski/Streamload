@@ -29,7 +29,12 @@ class ServiceDomains:
 
 @dataclass(frozen=True)
 class DomainsManifest:
-    """Versioned, signed manifest mapping service short_names to domains."""
+    """Versioned, signed manifest mapping service short_names to domains.
+
+    Note: ``frozen=True`` prevents reassigning the ``services`` attribute, but
+    the underlying dict and ``ServiceDomains.fallbacks`` lists remain mutable.
+    Treat instances as read-only after construction.
+    """
 
     schema_version: int
     key_id: str
@@ -50,11 +55,19 @@ class DomainsManifest:
                 f"supported: {SUPPORTED_SCHEMA_VERSIONS}"
             )
 
+        ttl_seconds_int = int(payload["ttl_seconds"])
+        if ttl_seconds_int <= 0:
+            raise ManifestError(
+                f"ttl_seconds must be > 0, got {ttl_seconds_int}"
+            )
+
         services: dict[str, ServiceDomains] = {}
         raw_services = payload["services"]
         if not isinstance(raw_services, dict):
             raise ManifestError("'services' must be an object")
         for short_name, sd in raw_services.items():
+            if not isinstance(short_name, str) or not short_name:
+                raise ManifestError(f"service short_name must be non-empty string, got {short_name!r}")
             if not isinstance(sd, dict) or "primary" not in sd:
                 raise ManifestError(f"service {short_name!r} missing 'primary'")
             services[short_name] = ServiceDomains(
@@ -66,7 +79,7 @@ class DomainsManifest:
             schema_version=int(payload["schema_version"]),
             key_id=str(payload["key_id"]),
             issued_at=str(payload["issued_at"]),
-            ttl_seconds=int(payload["ttl_seconds"]),
+            ttl_seconds=ttl_seconds_int,
             services=services,
         )
 
