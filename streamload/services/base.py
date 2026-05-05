@@ -158,6 +158,19 @@ class ServiceBase(ABC):
         self._resolver = resolver
         self._resolved_domain: str | None = None
 
+    def report_domain_failure(self) -> None:
+        """Tell the resolver this service's current domain may be dead.
+
+        Call from service code when a request fails in a way consistent with
+        domain rotation (DNS error, repeated 403, redirect to parking page).
+        """
+        resolver = getattr(self, "_resolver", None)
+        if resolver is None:
+            return
+        resolver.record_failure(self.short_name)
+        # Force re-resolution next time base_url is read.
+        self._resolved_domain = None
+
     @property
     def base_url(self) -> str:
         """Return ``https://<resolved>`` via DomainResolver when attached.
