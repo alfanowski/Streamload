@@ -20,11 +20,26 @@ from streamload.utils.logger import get_logger
 log = get_logger(__name__)
 
 
-def validate_domain(http: Any, domain: str, *, lang: str = "it") -> bool:
-    """Return True if ``https://{domain}/{lang}`` serves a valid Inertia page."""
+def validate_domain(
+    http: Any,
+    domain: str,
+    *,
+    lang: str = "it",
+    fast: bool = True,
+) -> bool:
+    """Return True if ``https://{domain}/{lang}`` serves a valid Inertia page.
+
+    When *fast* is True (default) the request uses ``max_retries=1`` so a
+    domain that fails DNS resolution costs ~2s instead of the default ~30s
+    of exponential backoff. The validator is meant as a quick yes/no probe
+    -- there's no value in retrying a domain that's down.
+    """
     url = f"https://{domain}/{lang}"
+    kwargs: dict[str, Any] = {"use_curl": True}
+    if fast:
+        kwargs["max_retries"] = 1
     try:
-        resp = http.get(url, use_curl=True)
+        resp = http.get(url, **kwargs)
     except Exception:
         log.debug("validate_domain: GET failed for %s", url, exc_info=True)
         return False

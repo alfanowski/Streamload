@@ -27,8 +27,14 @@ from streamload.services import ServiceRegistry
 from streamload.services.base import ServiceBase
 from streamload.utils.logger import get_logger
 
-from .extractor import extract_streams
+from .extractor import extract_streams, has_fhd_variant
 from .scraper import get_season_episodes, get_title_seasons, search_titles
+
+# Multi-mirror FHD upgrade: when the resolved primary mirror does not
+# advertise 1080p, probe up to this many alternative validated mirrors
+# searching for one that does. Each alternative costs the full extract
+# round-trip (~1-2 s), so the bound keeps worst-case latency reasonable.
+_MAX_FHD_ALTERNATIVES_TO_PROBE = 3
 
 log = get_logger(__name__)
 
@@ -213,30 +219,95 @@ class StreamingCommunityService(ServiceBase):
     def get_streams(self, item: Episode | MediaEntry) -> StreamBundle:
         """Resolve HLS streams for a film or episode.
 
-        Delegates to :mod:`.extractor` which in turn uses the
-        :mod:`streamload.player.vixcloud` module.
+        Strategy:
+            1. Use the resolver's FHD-preferred mirror if cached.
+            2. Otherwise extract from the currently resolved primary.
+            3. If the primary returned no 1080p variant, probe up to
+               ``_MAX_FHD_ALTERNATIVES_TO_PROBE`` alternative mirrors;
+               on the first one that yields FHD, cache it as the
+               FHD-preferred mirror and return its bundle.
         """
         if isinstance(item, Episode):
             media_id, slug, lang, _ = self._parse_episode(item)
             episode_id = int(item.id) if item.id else None
-            service_url = f"{self.base_url}/{lang}"
+        else:
+            media_id, slug, lang = self._parse_entry(item)
+            episode_id = None
 
-            return extract_streams(
-                self._http,
-                service_url,
-                media_id,
-                episode_id=episode_id,
-            )
+        # 1. Check the FHD-preferred mirror cache.
+        resolver = getattr(self, "_resolver", None)
+        fhd_preferred: str | None = None
+        if resolver is not None:
+            fhd_preferred = resolver.get_preferred(self.short_name, tag="fhd")
 
-        # MediaEntry (film)
-        media_id, slug, lang = self._parse_entry(item)
-        service_url = f"{self.base_url}/{lang}"
+        primary_domain = fhd_preferred or self._current_domain()
 
-        return extract_streams(
+        # 2. Extract from the chosen primary.
+        bundle = extract_streams(
             self._http,
-            service_url,
+            f"https://{primary_domain}/{lang}",
             media_id,
+            episode_id=episode_id,
         )
+
+        # If we already had an FHD-preferred mirror, trust it: don't probe.
+        if fhd_preferred is not None:
+            return bundle
+
+        if has_fhd_variant(bundle):
+            return bundle
+
+        # 3. Probe alternatives for FHD.
+        if resolver is None:
+            return bundle
+
+        log.info(
+            "No FHD on %s for media %s; probing alternative mirrors",
+            primary_domain, media_id,
+        )
+
+        probed = 0
+        for alt_domain in resolver.iter_alternatives(self.short_name):
+            if probed >= _MAX_FHD_ALTERNATIVES_TO_PROBE:
+                break
+            probed += 1
+            try:
+                alt_bundle = extract_streams(
+                    self._http,
+                    f"https://{alt_domain}/{lang}",
+                    media_id,
+                    episode_id=episode_id,
+                )
+            except Exception:
+                log.debug("Alt mirror %s failed for media %s",
+                          alt_domain, media_id, exc_info=True)
+                continue
+            if has_fhd_variant(alt_bundle):
+                resolver.set_preferred(self.short_name, tag="fhd", domain=alt_domain)
+                log.info(
+                    "FHD upgrade: media %s now served from %s",
+                    media_id, alt_domain,
+                )
+                return alt_bundle
+
+        # No FHD found anywhere. Mark the current primary as the
+        # FHD-preferred mirror so subsequent calls skip the probe
+        # (the cache TTL is 24h -- after that we re-probe in case
+        # the upstream re-enables FHD encoding).
+        log.info(
+            "Probed %d alternative mirror(s); no FHD available for media %s. "
+            "Caching primary as best-effort for 24h.",
+            probed, media_id,
+        )
+        resolver.set_preferred(self.short_name, tag="fhd", domain=primary_domain)
+        return bundle
+
+    # -- Internal helpers --------------------------------------------------
+
+    def _current_domain(self) -> str:
+        """Return the bare hostname of the current ``base_url``."""
+        from urllib.parse import urlparse
+        return urlparse(self.base_url).netloc
 
     # -- Private helpers ----------------------------------------------------
 
