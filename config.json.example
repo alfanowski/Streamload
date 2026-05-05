@@ -46,5 +46,10 @@
             "secret": "CDRM",
             "device_name": "public"
         }
+    },
+    "services": {
+        "sc": {
+            "base_url": ""
+        }
     }
 }
