@@ -1,0 +1,12 @@
+{
+  "issued_at": "2026-05-05T00:00:00Z",
+  "key_id": "sl-2026-05-53b1aa",
+  "schema_version": 1,
+  "services": {
+    "sc": {
+      "fallbacks": ["streamingcommunity.prof", "streamingcommunity.computer"],
+      "primary": "streamingcommunityz.nl"
+    }
+  },
+  "ttl_seconds": 21600
+}
