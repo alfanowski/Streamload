@@ -584,7 +584,7 @@ class StreamloadApp:
             self._selector.hide_loading()
 
         if search_error is not None:
-            log.error("Search failed on %s", service.name, exc_info=True)
+            log.error("Search failed on %s", service.name, exc_info=search_error)
             self._prompts.show_error(
                 self._i18n.t(
                     "error.service",
@@ -942,7 +942,7 @@ class StreamloadApp:
             self._prompts.show_error(
                 self._i18n.t("error.no_streams", name=name) + f"\n{stream_error}"
             )
-            log.error("get_streams failed for %s", name, exc_info=True)
+            log.error("get_streams failed for %s", name, exc_info=stream_error)
             return None
 
         if bundle is None or not bundle.video:

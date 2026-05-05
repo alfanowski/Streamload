@@ -15,6 +15,7 @@ The flow:
 
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -41,17 +42,55 @@ class PlayerParams:
     can_play_fhd: bool = False
 
 
+def _select_active_stream_url(script_text: str) -> str | None:
+    """Pick the URL of the active server from ``window.streams``.
+
+    The embed script declares an array of mirror servers::
+
+        window.streams = [
+            {"name":"Server1","active":false,"url":"https://.../playlist/X?b=1&ub=1"},
+            {"name":"Server2","active":1,         "url":"https://.../playlist/X?b=1&ab=1"},
+        ];
+
+    Each server URL carries a discriminator query param (``ab=1``,
+    ``ub=1``, …) that is **mandatory** for VixCloud to accept the request.
+    The plain ``window.masterPlaylist.url`` does not include it and gets
+    rejected with HTTP 403. We must use the ``url`` of the entry where
+    ``active`` is truthy (``1`` or ``true``).
+    """
+    m = re.search(r"window\.streams\s*=\s*(\[.*?\])\s*;", script_text, re.DOTALL)
+    if not m:
+        return None
+    try:
+        streams = json.loads(m.group(1))
+    except (json.JSONDecodeError, TypeError):
+        return None
+    if not isinstance(streams, list):
+        return None
+
+    # Prefer the active server. Fall back to the first server with a URL.
+    for s in streams:
+        if isinstance(s, dict) and s.get("active") and s.get("url"):
+            return str(s["url"])
+    for s in streams:
+        if isinstance(s, dict) and s.get("url"):
+            return str(s["url"])
+    return None
+
+
 def _parse_player_script(script_text: str) -> PlayerParams:
     """Extract player parameters from the inline ``<script>`` block.
 
     The script embeds variables such as::
 
-        window.masterPlaylist = { ... url: 'https://...m3u8', ... };
+        window.streams = [{"name":"Server1","active":1,"url":"https://...?b=1&ab=1"}, ...];
+        window.masterPlaylist = { params: { token:'…', expires:'…' }, url:'…' };
         window.video = { id: '12345' };
         window.canPlayFHD = true;
 
-    Returns a populated :class:`PlayerParams` dataclass.  Missing fields
-    are left as ``None`` / ``False``.
+    The active-server URL from ``window.streams`` (when present) takes
+    priority over ``window.masterPlaylist.url`` because it carries the
+    server-discriminator query param VixCloud requires.
     """
     params = PlayerParams()
 
@@ -74,16 +113,21 @@ def _parse_player_script(script_text: str) -> PlayerParams:
         r"""window\.video\s*=\s*\{[^}]*\bid\s*:\s*['"](?P<id>\d+)['"]""",
         script_text,
     )
+    # Accept ``true`` / ``false`` and also numeric ``1`` / ``0`` -- VixCloud
+    # has been observed to use both forms across pages.
     canplay_m = re.search(
-        r"window\.canPlayFHD\s*=\s*(true|false)",
+        r"window\.canPlayFHD\s*=\s*(true|false|1|0)\b",
         script_text,
     )
 
     params.token = token_m.group("token") if token_m else None
     params.expires = expires_m.group("expires") if expires_m else None
-    params.master_url = url_m.group("url") if url_m else None
+    # Prefer the active-server URL from ``window.streams`` (carries the
+    # discriminator param VixCloud requires); fall back to masterPlaylist.url.
+    active_url = _select_active_stream_url(script_text)
+    params.master_url = active_url or (url_m.group("url") if url_m else None)
     params.video_id = int(video_id_m.group("id")) if video_id_m else None
-    params.can_play_fhd = bool(canplay_m and canplay_m.group(1) == "true")
+    params.can_play_fhd = bool(canplay_m and canplay_m.group(1) in ("true", "1"))
 
     return params
 
@@ -211,16 +255,16 @@ def build_playlist_url(params: PlayerParams) -> str | None:
         return None
 
     parsed = urlparse(params.master_url)
-    query_params: dict[str, str] = {}
-
-    # Preserve any existing 'b' param (bandwidth hint).
+    # Preserve every existing query param verbatim. The active-server URL
+    # may carry mandatory discriminators (e.g. ``ab=1``, ``ub=1``) that
+    # VixCloud uses to route the request -- stripping them yields HTTP 403.
     existing_qs = parse_qs(parsed.query)
-    if existing_qs.get("b") == ["1"]:
-        query_params["b"] = "1"
+    query_params: dict[str, str] = {k: v[0] for k, v in existing_qs.items() if v}
 
-    # Always request FHD. If the server doesn't support it, the playlist
-    # will simply not include 1080p variants (graceful fallback).
-    query_params["h"] = "1"
+    # Request FHD only when the player advertises it; otherwise the server
+    # may return an empty playlist or reject the request entirely.
+    if params.can_play_fhd:
+        query_params["h"] = "1"
 
     # Authentication.
     if params.token:
