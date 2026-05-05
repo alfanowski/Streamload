@@ -52,3 +52,15 @@ def test_is_fresh_uses_validated_at_and_ttl(cache: DomainCache):
     assert cache.is_fresh("sc", ttl_seconds=10, now=1005.0) is True
     assert cache.is_fresh("sc", ttl_seconds=10, now=1011.0) is False
     assert cache.is_fresh("missing", ttl_seconds=10, now=1000.0) is False
+
+
+def test_read_permission_error_propagates(cache: DomainCache, tmp_path: Path):
+    """Permission errors must NOT be swallowed -- prevents silent overwrite."""
+    cache.set("sc", domain="x.tld", source="cache", validated_at=1.0)
+    p = tmp_path / "domains_cache.json"
+    p.chmod(0o000)
+    try:
+        with pytest.raises(PermissionError):
+            cache.get("sc")
+    finally:
+        p.chmod(0o644)

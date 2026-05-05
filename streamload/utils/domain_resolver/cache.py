@@ -79,7 +79,10 @@ class DomainCache:
             return {"version": _SCHEMA_VERSION, "entries": {}}
         try:
             return json.loads(self._path.read_text(encoding="utf-8"))
-        except (json.JSONDecodeError, OSError):
+        except json.JSONDecodeError:
+            # Corrupt JSON -> treat as empty so a fresh write overwrites it.
+            # OSError (permission denied, I/O error) deliberately not caught:
+            # we'd rather surface the real failure than silently overwrite.
             return {"version": _SCHEMA_VERSION, "entries": {}}
 
     def _mutate(self, fn) -> None:
