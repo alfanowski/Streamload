@@ -70,3 +70,10 @@ def test_validate_uses_curl_and_lang_path():
     args, kwargs = http.get.call_args
     assert args[0] == "https://x.tld/it"
     assert kwargs.get("use_curl") is True
+
+
+def test_validate_rejects_malformed_data_page_json():
+    http = MagicMock()
+    html = '<div id="app" data-page=\'not valid json\'></div>'
+    http.get.return_value = _resp(200, html)
+    assert validate_domain(http, "x.tld") is False

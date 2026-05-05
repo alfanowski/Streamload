@@ -19,8 +19,6 @@ from streamload.utils.logger import get_logger
 
 log = get_logger(__name__)
 
-_VALIDATION_TIMEOUT_HINT = 10  # seconds; HttpClient honors its own config
-
 
 def validate_domain(http: Any, domain: str, *, lang: str = "it") -> bool:
     """Return True if ``https://{domain}/{lang}`` serves a valid Inertia page."""
@@ -31,8 +29,9 @@ def validate_domain(http: Any, domain: str, *, lang: str = "it") -> bool:
         log.debug("validate_domain: GET failed for %s", url, exc_info=True)
         return False
 
-    if getattr(resp, "status_code", 0) != 200:
-        log.debug("validate_domain: status=%s for %s", resp.status_code, url)
+    status = getattr(resp, "status_code", 0)
+    if status != 200:
+        log.debug("validate_domain: status=%s for %s", status, url)
         return False
 
     text = getattr(resp, "text", "") or ""
