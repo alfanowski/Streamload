@@ -28,3 +28,4 @@ Video/
 .DS_Store
 Thumbs.db
 tmp/
+secret/
