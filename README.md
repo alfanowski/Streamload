@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/Streamload-v0.1.0-blue?style=for-the-badge" alt="Version"/>
+  <img src="https://img.shields.io/badge/Streamload-v0.1.1-blue?style=for-the-badge" alt="Version"/>
   <img src="https://img.shields.io/badge/python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"/>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=for-the-badge" alt="Platform"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-green?style=for-the-badge" alt="License"/>
