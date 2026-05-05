@@ -10,6 +10,7 @@ download engine completely decoupled from service-specific logic.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 from streamload.models.media import (
     AuthSession,
@@ -49,6 +50,8 @@ class ServiceBase(ABC):
     def __init__(self, http_client: HttpClient) -> None:
         self._http: HttpClient = http_client
         self._session: AuthSession | None = None
+        self._resolver = None
+        self._resolved_domain: str | None = None
 
     # -- Authentication -----------------------------------------------------
 
@@ -150,9 +153,23 @@ class ServiceBase(ABC):
 
     # -- Convenience helpers ------------------------------------------------
 
+    def attach_resolver(self, resolver: Any) -> None:
+        """Wire a DomainResolver. Subsequent base_url reads route through it."""
+        self._resolver = resolver
+        self._resolved_domain: str | None = None
+
     @property
     def base_url(self) -> str:
-        """Return ``https://{first_domain}`` or an empty string if no domains."""
+        """Return ``https://<resolved>`` via DomainResolver when attached.
+
+        Falls back to ``https://{domains[0]}`` when no resolver is attached
+        (used by tests / standalone scripts).
+        """
+        resolver = getattr(self, "_resolver", None)
+        if resolver is not None:
+            if getattr(self, "_resolved_domain", None) is None:
+                self._resolved_domain = resolver.resolve(self.short_name).domain
+            return f"https://{self._resolved_domain}"
         return f"https://{self.domains[0]}" if self.domains else ""
 
     def supports_type(self, media_type: MediaType) -> bool:
