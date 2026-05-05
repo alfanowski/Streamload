@@ -47,6 +47,12 @@ class ServiceBase(ABC):
     language: str
     requires_login: bool = False
 
+    # Optional discovery seeds for the DomainResolver's last-resort source.
+    # Set this on services that rotate domains aggressively. Format:
+    #     discovery = {"prefixes": ["sitename"], "tlds": ["nl", "lol", ...]}
+    # When ``None`` the DiscoverySource skips this service.
+    discovery: dict[str, list[str]] | None = None
+
     def __init__(self, http_client: HttpClient) -> None:
         self._http: HttpClient = http_client
         self._session: AuthSession | None = None

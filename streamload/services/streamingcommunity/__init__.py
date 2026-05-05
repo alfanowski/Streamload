@@ -55,6 +55,22 @@ class StreamingCommunityService(ServiceBase):
     language = "it"
     requires_login = False
 
+    # Discovery seeds: when all higher-priority sources fail, the resolver
+    # permutes prefix x tld and probes each. The active validator filters
+    # parking pages, so the broad TLD list is safe.
+    discovery = {
+        "prefixes": ["streamingcommunityz", "streamingcommunity"],
+        "tlds": [
+            # Currently or recently in rotation
+            "bargains", "pet", "nl", "prof", "computer",
+            # Common cheap TLDs used for streaming rotation
+            "skin", "shopping", "online", "life", "ws", "best", "vip",
+            "cyou", "icu", "zone", "live", "watch", "quest", "monster",
+            "click", "rest", "tv", "fun", "bid", "fyi", "cfd", "buzz",
+            "lol", "wtf", "boats", "homes", "boo", "rip", "men",
+        ],
+    }
+
     # -- Internal state cached between get_seasons / get_episodes calls ----
 
     def __init__(self, http_client):

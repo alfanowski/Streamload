@@ -7,7 +7,13 @@ from typing import Any
 from .cache import DomainCache
 from .circuit_breaker import CircuitBreaker
 from .resolver import DomainResolver
-from .sources import CacheSource, ConfigSource, ProbeSource, RemoteSource
+from .sources import (
+    CacheSource,
+    ConfigSource,
+    DiscoverySource,
+    ProbeSource,
+    RemoteSource,
+)
 from .trusted_keys import TRUSTED_KEYS
 from .validator import validate_domain
 
@@ -23,10 +29,24 @@ def build_resolver(
     cache_path: Path,
     repo: str,
     branch: str = "main",
+    discovery_seeds: dict[str, dict[str, list[str]]] | None = None,
     cache_ttl_seconds: int = DEFAULT_CACHE_TTL_SECONDS,
     breaker_threshold: int = 3,
     lang: str = "it",
 ) -> DomainResolver:
+    """Build the production resolver with the full 5-source chain.
+
+    Source priority (highest to lowest):
+
+        1. ConfigSource     -- user override in config.json
+        2. CacheSource      -- last validated domain (within TTL)
+        3. RemoteSource     -- signed manifest from GitHub raw / jsDelivr
+        4. ProbeSource      -- hardcoded ``ServiceBase.domains`` list
+        5. DiscoverySource  -- prefix x TLD permutation (last resort)
+
+    Each candidate runs through the active validator before being accepted.
+    The first validated domain wins; the result is cached.
+    """
     cache = DomainCache(cache_path)
     sources = [
         ConfigSource(overrides=config_overrides),
@@ -39,6 +59,7 @@ def build_resolver(
             trusted_keys=TRUSTED_KEYS,
         ),
         ProbeSource(seeds=probe_seeds),
+        DiscoverySource(seeds=discovery_seeds or {}),
     ]
     return DomainResolver(
         sources=sources,

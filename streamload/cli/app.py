@@ -295,6 +295,11 @@ class StreamloadApp:
                 cls.short_name: list(cls.domains)
                 for cls in ServiceRegistry.get_all()
             },
+            discovery_seeds={
+                cls.short_name: cls.discovery
+                for cls in ServiceRegistry.get_all()
+                if getattr(cls, "discovery", None)
+            },
             cache_path=Path("data/domains_cache.json"),
             repo="alfanowski/Streamload",
             branch="main",
