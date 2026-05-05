@@ -40,5 +40,5 @@ def verify_manifest(
 
     try:
         Ed25519PublicKey.from_public_bytes(pub_raw).verify(sig_raw, payload)
-    except InvalidSignature as exc:
+    except (InvalidSignature, ValueError) as exc:
         raise SignatureError("signature is invalid") from exc

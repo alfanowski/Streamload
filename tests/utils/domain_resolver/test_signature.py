@@ -54,3 +54,30 @@ def test_verify_manifest_rejects_malformed_b64_signature():
     _priv, pub_b64 = _gen_keypair()
     with pytest.raises(SignatureError, match="malformed"):
         verify_manifest(b"x", "not!base64!", key_id="k1", trusted_keys={"k1": pub_b64})
+
+
+def test_verify_manifest_rejects_malformed_b64_in_trusted_keys():
+    priv = Ed25519PrivateKey.generate()
+    sig = base64.b64encode(priv.sign(b"x")).decode("ascii")
+    with pytest.raises(SignatureError, match="malformed"):
+        verify_manifest(
+            b"x", sig, key_id="k1",
+            trusted_keys={"k1": "!!! not base64 !!!"},
+        )
+
+
+def test_verify_manifest_rejects_wrong_length_public_key():
+    priv = Ed25519PrivateKey.generate()
+    sig = base64.b64encode(priv.sign(b"x")).decode("ascii")
+    short_pub = base64.b64encode(b"\x00" * 16).decode("ascii")  # 16 bytes
+    with pytest.raises(SignatureError, match="32 bytes"):
+        verify_manifest(
+            b"x", sig, key_id="k1",
+            trusted_keys={"k1": short_pub},
+        )
+
+
+def test_verify_manifest_accepts_empty_payload():
+    priv, pub_b64 = _gen_keypair()
+    sig = base64.b64encode(priv.sign(b"")).decode("ascii")
+    verify_manifest(b"", sig, key_id="k1", trusted_keys={"k1": pub_b64})
