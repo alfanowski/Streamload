@@ -50,6 +50,7 @@ from streamload.models.stream import SelectedTracks, StreamBundle
 from streamload.services import ServiceRegistry, load_services
 from streamload.services.base import ServiceBase
 from streamload.utils.config import ConfigManager
+from streamload.utils.domain_resolver.factory import build_resolver
 from streamload.utils.http import HttpClient
 from streamload.utils.logger import get_logger, setup_logging
 from streamload.utils.system import SystemChecker
@@ -282,6 +283,30 @@ class StreamloadApp:
         # 6. Services
         load_services()
         self._services = ServiceRegistry.instantiate_all(self._http, config)
+
+        # Wire DomainResolver into every service instance.
+        resolver = build_resolver(
+            http=self._http,
+            config_overrides={
+                sn: sec.get("base_url", "")
+                for sn, sec in config.services.items()
+            },
+            probe_seeds={
+                cls.short_name: list(cls.domains)
+                for cls in ServiceRegistry.get_all()
+            },
+            discovery_seeds={
+                cls.short_name: cls.discovery
+                for cls in ServiceRegistry.get_all()
+                if getattr(cls, "discovery", None)
+            },
+            cache_path=Path("data/domains_cache.json"),
+            repo="alfanowski/Streamload",
+            branch="main",
+        )
+        for service_instance in self._services.values():
+            service_instance.attach_resolver(resolver)
+
         self._authenticate_services()
 
         # 7. TMDB, DRM, downloader

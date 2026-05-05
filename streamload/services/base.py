@@ -10,6 +10,7 @@ download engine completely decoupled from service-specific logic.
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 from streamload.models.media import (
     AuthSession,
@@ -46,9 +47,17 @@ class ServiceBase(ABC):
     language: str
     requires_login: bool = False
 
+    # Optional discovery seeds for the DomainResolver's last-resort source.
+    # Set this on services that rotate domains aggressively. Format:
+    #     discovery = {"prefixes": ["sitename"], "tlds": ["nl", "lol", ...]}
+    # When ``None`` the DiscoverySource skips this service.
+    discovery: dict[str, list[str]] | None = None
+
     def __init__(self, http_client: HttpClient) -> None:
         self._http: HttpClient = http_client
         self._session: AuthSession | None = None
+        self._resolver = None
+        self._resolved_domain: str | None = None
 
     # -- Authentication -----------------------------------------------------
 
@@ -150,9 +159,36 @@ class ServiceBase(ABC):
 
     # -- Convenience helpers ------------------------------------------------
 
+    def attach_resolver(self, resolver: Any) -> None:
+        """Wire a DomainResolver. Subsequent base_url reads route through it."""
+        self._resolver = resolver
+        self._resolved_domain: str | None = None
+
+    def report_domain_failure(self) -> None:
+        """Tell the resolver this service's current domain may be dead.
+
+        Call from service code when a request fails in a way consistent with
+        domain rotation (DNS error, repeated 403, redirect to parking page).
+        """
+        resolver = getattr(self, "_resolver", None)
+        if resolver is None:
+            return
+        resolver.record_failure(self.short_name)
+        # Force re-resolution next time base_url is read.
+        self._resolved_domain = None
+
     @property
     def base_url(self) -> str:
-        """Return ``https://{first_domain}`` or an empty string if no domains."""
+        """Return ``https://<resolved>`` via DomainResolver when attached.
+
+        Falls back to ``https://{domains[0]}`` when no resolver is attached
+        (used by tests / standalone scripts).
+        """
+        resolver = getattr(self, "_resolver", None)
+        if resolver is not None:
+            if getattr(self, "_resolved_domain", None) is None:
+                self._resolved_domain = resolver.resolve(self.short_name).domain
+            return f"https://{self._resolved_domain}"
         return f"https://{self.domains[0]}" if self.domains else ""
 
     def supports_type(self, media_type: MediaType) -> bool:

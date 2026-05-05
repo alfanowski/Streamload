@@ -54,6 +54,22 @@ Streamload is an interactive command-line video downloader that aggregates searc
 | StreamingCommunity | Film / Serie | IT |
 | TubiTV | Serie | EN |
 
+## Domain Rotation
+
+Italian streaming sites rotate domains frequently. Streamload tracks them automatically so you rarely need to intervene.
+
+- The active domain list is stored in `domains.json` in this repository, signed with Ed25519. When GitHub raw is unreachable, a jsDelivr CDN mirror serves the same signed bytes as a fallback.
+- Every candidate domain is actively probed before use: parking pages, ISP hijack pages, and connection errors are all rejected silently.
+- The resolved domain is cached for 6 hours. On the next startup after the TTL expires, Streamload re-resolves in the background.
+- For an emergency override, set `services.<short_name>.base_url` in `config.json` -- the config source is always consulted first, bypassing the network entirely.
+- Manage resolution state from the command line:
+
+      python streamload-domains.py status    # show current cache state
+      python streamload-domains.py refresh   # force re-resolution for all services
+      python streamload-domains.py pin <service> <url>  # pin a URL for one service
+
+For full operator instructions, including how to update `domains.json` and rotate the signing key, see [`docs/domain-resolver.md`](docs/domain-resolver.md).
+
 ## Requirements
 
 - **Python 3.10** or higher

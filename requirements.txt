@@ -9,3 +9,6 @@ unidecode>=1.3
 pathvalidate>=3.2
 ua-generator>=1.0
 imageio-ffmpeg>=0.5.1
+cryptography>=42
+pytest>=8
+pytest-mock>=3

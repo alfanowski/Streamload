@@ -282,6 +282,7 @@ class AppConfig:
     process: ProcessConfig = field(default_factory=ProcessConfig)
     network: NetworkConfig = field(default_factory=NetworkConfig)
     drm: DRMConfig = field(default_factory=DRMConfig)
+    services: dict[str, dict[str, str]] = field(default_factory=dict)
 
     # -- Serialisation / deserialisation ------------------------------------
 
@@ -326,6 +327,16 @@ class AppConfig:
         network_data = data.get("network")
         drm_data = data.get("drm")
 
+        raw_services = data.get("services", {})
+        if not isinstance(raw_services, dict):
+            raw_services = {}
+        clean_services: dict[str, dict[str, str]] = {}
+        for short_name, sec in raw_services.items():
+            if isinstance(sec, dict):
+                clean_services[short_name] = {
+                    k: str(v) for k, v in sec.items() if isinstance(v, (str, int, float))
+                }
+
         return cls(
             language=language,
             preferred_audio=preferred_audio,
@@ -356,4 +367,5 @@ class AppConfig:
                 if isinstance(drm_data, dict)
                 else DRMConfig()
             ),
+            services=clean_services,
         )
