@@ -62,7 +62,7 @@ class DomainResolver:
                 continue
 
             for domain in candidates:
-                if self._validate(self._http, domain, self._lang):
+                if self._validate(self._http, domain, lang=self._lang):
                     now = time.time()
                     self._cache.set(
                         short_name,
