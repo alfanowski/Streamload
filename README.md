@@ -160,6 +160,44 @@ By using Streamload, you acknowledge and agree to the following terms:
 
 **Use responsibly and respect content creators.**
 
+## API server (v2)
+
+Streamload v2 exposes a FastAPI HTTP API alongside the existing curses CLI.
+
+### Quick start (development)
+
+```bash
+# Configure
+cp .env.example .env  # edit DATABASE_URL, RESEND_API_KEY, etc.
+
+# Setup database (one-time)
+createdb streamload
+DATABASE_URL=postgresql+asyncpg://streamload:streamload@127.0.0.1:5432/streamload \
+    venv/bin/alembic upgrade head
+
+# Launch the API server
+venv/bin/python streamload.py --api
+# Listens on http://127.0.0.1:8000
+```
+
+### Endpoints (Plan 1)
+
+- `GET /api/health` — liveness probe
+- `GET /api/version` — version + git sha
+- `POST /api/auth/register` — create account (first user becomes admin)
+- `POST /api/auth/login` — password login
+- `POST /api/auth/logout` — terminate session
+- `GET /api/me` — current user profile
+- `POST /api/auth/verify-email` — confirm email via token
+- `POST /api/auth/request-password-reset` — initiate reset
+- `POST /api/auth/confirm-password-reset` — apply new password
+- `POST /api/auth/passkey/registration-options` — start passkey registration
+- `POST /api/auth/passkey/registration-verify` — finish passkey registration
+- `POST /api/auth/passkey/authentication-options` — start passkey login
+- `POST /api/auth/passkey/authentication-verify` — finish passkey login
+
+Interactive docs at http://127.0.0.1:8000/api/docs (Swagger UI).
+
 ## License
 
 This project is licensed under the [GNU Affero General Public License v3.0](https://www.gnu.org/licenses/agpl-3.0.html).
