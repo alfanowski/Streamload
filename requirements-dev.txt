@@ -1,0 +1,4 @@
+-r requirements.txt
+pytest-asyncio>=0.24
+httpx[http2]>=0.27
+aiosqlite>=0.20
