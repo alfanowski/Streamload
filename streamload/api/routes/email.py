@@ -1,7 +1,6 @@
 """Email verification + password reset endpoints."""
 from __future__ import annotations
 
-import os
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request, status
@@ -12,19 +11,10 @@ from streamload.api.deps import SessionDep
 from streamload.auth.email_tokens import consume_token, issue_token
 from streamload.auth.passwords import hash_password
 from streamload.db.models import Session as SessionModel, User
-from streamload.email.client import EmailClient
+from streamload.email import build_email_client
 from streamload.email.templates import password_reset_email
 
 router = APIRouter(prefix="/auth", tags=["email"])
-
-
-def _build_email_client() -> EmailClient:
-    """Best-effort email client from env. Falls back to dry-run when no API key."""
-    api_key = os.environ.get("RESEND_API_KEY", "")
-    from_addr = os.environ.get("RESEND_FROM", "noreply@resend.dev")
-    if not api_key:
-        return EmailClient(api_key="", from_address=from_addr, dry_run=True)
-    return EmailClient(api_key=api_key, from_address=from_addr)
 
 
 class VerifyRequest(BaseModel):
@@ -71,8 +61,8 @@ async def request_password_reset(
     if u is not None:
         tok = await issue_token(db, user_id=u.id, purpose="reset_password")
         base = str(request.base_url).rstrip("/")
-        link = f"{base}/reset-password?token={tok}"
-        client = _build_email_client()
+        link = f"{base}/reset?token={tok}"
+        client = build_email_client()
         subject, html, text = password_reset_email(username=u.username, link=link)
         try:
             await client.send(to=u.email, subject=subject, html=html, text=text)

@@ -1,7 +1,6 @@
 """Auth endpoints: register, login, logout."""
 from __future__ import annotations
 
-import os
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
@@ -15,7 +14,7 @@ from streamload.auth.passwords import hash_password, verify_password
 from streamload.auth.rate_limit import RateLimiter
 from streamload.auth.sessions import create_session, delete_session
 from streamload.db.models import User
-from streamload.email.client import EmailClient
+from streamload.email import build_email_client
 from streamload.email.templates import verification_email
 from streamload.utils.logger import get_logger
 
@@ -51,15 +50,6 @@ def _user_to_public(u: User) -> UserPublic:
     )
 
 
-def _build_email_client() -> EmailClient:
-    """Best-effort email client from env. Falls back to dry-run when no API key."""
-    api_key = os.environ.get("RESEND_API_KEY", "")
-    from_addr = os.environ.get("RESEND_FROM", "noreply@resend.dev")
-    if not api_key:
-        return EmailClient(api_key="", from_address=from_addr, dry_run=True)
-    return EmailClient(api_key=api_key, from_address=from_addr)
-
-
 @router.post("/register", status_code=201, response_model=UserPublic)
 async def register(
     payload: RegisterRequest,
@@ -89,7 +79,7 @@ async def register(
     tok = await issue_token(db, user_id=user.id, purpose="verify_email")
     base = str(request.base_url).rstrip("/")
     link = f"{base}/verify?token={tok}"
-    client = _build_email_client()
+    client = build_email_client()
     subject, html, text = verification_email(username=user.username, link=link)
     try:
         await client.send(to=user.email, subject=subject, html=html, text=text)
