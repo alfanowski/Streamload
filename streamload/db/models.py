@@ -14,10 +14,12 @@ from sqlalchemy import (
     BigInteger,
     Boolean,
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Integer,
     LargeBinary,
+    Numeric,
     String,
     Text,
     func,
@@ -162,3 +164,96 @@ class WebauthnCredential(Base):
     )
 
     user: Mapped[User] = relationship(back_populates="webauthn_credentials")
+
+
+class CatalogItem(Base):
+    __tablename__ = "catalog_items"
+
+    tmdb_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
+    media_type: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    original_title: Mapped[Optional[str]] = mapped_column(Text)
+    year: Mapped[Optional[int]] = mapped_column(Integer, index=True)
+    poster_url: Mapped[Optional[str]] = mapped_column(Text)
+    backdrop_url: Mapped[Optional[str]] = mapped_column(Text)
+    overview: Mapped[Optional[str]] = mapped_column(Text)
+    rating: Mapped[Optional[float]] = mapped_column(Numeric(3, 1))
+    runtime_minutes: Mapped[Optional[int]] = mapped_column(Integer)
+    seasons_count: Mapped[Optional[int]] = mapped_column(Integer)
+    genres: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list, server_default="{}")
+    metadata_fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+
+    sources: Mapped[list["CatalogSource"]] = relationship(
+        back_populates="item", cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        CheckConstraint("media_type IN ('movie', 'tv')", name="ck_catalog_items_media_type"),
+    )
+
+
+class CatalogSource(Base):
+    __tablename__ = "catalog_sources"
+
+    tmdb_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("catalog_items.tmdb_id", ondelete="CASCADE"), primary_key=True,
+    )
+    service_short_name: Mapped[str] = mapped_column(Text, primary_key=True, index=True)
+    service_url: Mapped[str] = mapped_column(Text, nullable=False)
+    service_media_id: Mapped[str] = mapped_column(Text, nullable=False)
+    quality_max_height: Mapped[Optional[int]] = mapped_column(Integer)
+    languages_audio: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list, server_default="{}")
+    languages_subs: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list, server_default="{}")
+    last_verified_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+    success_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+    failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
+
+    item: Mapped[CatalogItem] = relationship(back_populates="sources")
+
+
+class Collection(Base):
+    __tablename__ = "collections"
+
+    id: Mapped[str] = mapped_column(Text, primary_key=True)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    media_type: Mapped[Optional[str]] = mapped_column(Text)
+    sort_order: Mapped[int] = mapped_column(Integer, nullable=False)
+    refresh_ttl_hours: Mapped[int] = mapped_column(Integer, nullable=False, default=24, server_default="24")
+    last_refreshed_at: Mapped[Optional[datetime]] = mapped_column(DateTime(timezone=True))
+
+    items: Mapped[list["CollectionItem"]] = relationship(
+        back_populates="collection", cascade="all, delete-orphan",
+    )
+
+
+class CollectionItem(Base):
+    __tablename__ = "collection_items"
+
+    collection_id: Mapped[str] = mapped_column(
+        Text, ForeignKey("collections.id", ondelete="CASCADE"), primary_key=True,
+    )
+    tmdb_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("catalog_items.tmdb_id", ondelete="CASCADE"), primary_key=True,
+    )
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+
+    collection: Mapped[Collection] = relationship(back_populates="items")
+
+
+class TvEpisode(Base):
+    __tablename__ = "tv_episodes"
+
+    tmdb_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("catalog_items.tmdb_id", ondelete="CASCADE"), primary_key=True,
+    )
+    season_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    episode_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    title: Mapped[Optional[str]] = mapped_column(Text)
+    overview: Mapped[Optional[str]] = mapped_column(Text)
+    air_date: Mapped[Optional[Date]] = mapped_column(Date)
+    runtime_minutes: Mapped[Optional[int]] = mapped_column(Integer)
+    still_url: Mapped[Optional[str]] = mapped_column(Text)
