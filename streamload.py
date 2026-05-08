@@ -15,7 +15,18 @@ def main():
     args, _ = parser.parse_known_args()
 
     if args.api:
-        print("API server not yet implemented (Plan 1 in progress)")
+        import os
+        from granian import Granian
+
+        server = Granian(
+            target="streamload.api.app:app",
+            address=os.environ.get("STREAMLOAD_API_HOST", "127.0.0.1"),
+            port=int(os.environ.get("STREAMLOAD_API_PORT", "8000")),
+            interface="asgi",
+            loop="auto",
+            workers=1,
+        )
+        server.serve()
         sys.exit(0)
 
     from streamload.cli.app import StreamloadApp
