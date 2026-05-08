@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import os
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field
@@ -10,8 +11,9 @@ from sqlalchemy.exc import IntegrityError
 
 from streamload.api.deps import SessionDep
 from streamload.auth.email_tokens import issue_token
-from streamload.auth.passwords import hash_password
-from streamload.auth.sessions import create_session
+from streamload.auth.passwords import hash_password, verify_password
+from streamload.auth.rate_limit import RateLimiter
+from streamload.auth.sessions import create_session, delete_session
 from streamload.db.models import User
 from streamload.email.client import EmailClient
 from streamload.email.templates import verification_email
@@ -20,6 +22,9 @@ from streamload.utils.logger import get_logger
 log = get_logger(__name__)
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+
+_login_limiter_per_ip = RateLimiter(rate=10, per_seconds=300)
+_login_limiter_per_user = RateLimiter(rate=5, per_seconds=300)
 
 
 class RegisterRequest(BaseModel):
@@ -108,3 +113,46 @@ async def register(
         max_age=60 * 60 * 24 * 30,
     )
     return _user_to_public(user)
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(min_length=1, max_length=255)  # accepts username OR email
+    password: str = Field(min_length=1, max_length=128)
+
+
+@router.post("/login", status_code=200, response_model=UserPublic)
+async def login(payload: LoginRequest, db: SessionDep, response: Response, request: Request) -> UserPublic:
+    ip_key = request.client.host if request.client else "unknown"
+    user_key = payload.username.lower()
+    if not _login_limiter_per_ip.check(ip_key) or not _login_limiter_per_user.check(user_key):
+        raise HTTPException(status.HTTP_429_TOO_MANY_REQUESTS, "too many login attempts")
+
+    stmt = select(User).where((User.username == payload.username) | (User.email == payload.username.lower()))
+    user = (await db.execute(stmt)).scalar_one_or_none()
+    if user is None or not user.password_hash:
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
+    if not verify_password(user.password_hash, payload.password):
+        raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
+
+    user.last_login_at = datetime.now(UTC)
+    await db.commit()
+
+    token = await create_session(
+        db, user_id=user.id,
+        user_agent=request.headers.get("user-agent"),
+        ip_address=request.client.host if request.client else None,
+    )
+    response.set_cookie(
+        "session", token,
+        httponly=True, secure=request.url.scheme == "https",
+        samesite="lax", max_age=60 * 60 * 24 * 30,
+    )
+    return _user_to_public(user)
+
+
+@router.post("/logout", status_code=204)
+async def logout(request: Request, response: Response, db: SessionDep) -> None:
+    token = request.cookies.get("session")
+    if token:
+        await delete_session(db, token=token)
+    response.delete_cookie("session")
