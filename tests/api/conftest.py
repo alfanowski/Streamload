@@ -9,7 +9,19 @@ import pytest_asyncio
 from sqlalchemy import text
 
 from streamload.api.app import create_app
-from streamload.db import get_session, init as db_init, shutdown as db_shutdown
+from streamload.db import init as db_init, shutdown as db_shutdown
+from streamload.db.session import _session_factory  # for cleanup
+
+
+async def _truncate_all(factory):
+    async with factory() as s:
+        # Order respects FKs (children first).
+        for table in (
+            "email_tokens", "webauthn_credentials", "sessions",
+            "users",
+        ):
+            await s.execute(text(f"TRUNCATE TABLE {table} CASCADE"))
+        await s.commit()
 
 
 @pytest_asyncio.fixture
@@ -19,11 +31,10 @@ async def api_client() -> AsyncIterator[httpx.AsyncClient]:
         "postgresql+asyncpg://streamload:streamload@127.0.0.1:5432/streamload_test",
     )
     db_init(test_url)
-    # Truncate test tables so each test starts from a clean state.
-    async for db in get_session():
-        await db.execute(text("TRUNCATE users CASCADE"))
-        await db.commit()
-        break
+    # Truncate before each test for isolation.
+    from streamload.db.session import _session_factory as f
+    await _truncate_all(f)
+
     app = create_app()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
