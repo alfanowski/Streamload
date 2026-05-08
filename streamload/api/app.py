@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 from streamload.db import init as db_init, shutdown as db_shutdown
 
-from .routes import health
+from .routes import health, me
 
 
 @asynccontextmanager
@@ -38,6 +38,7 @@ def create_app() -> FastAPI:
         openapi_url="/api/openapi.json",
     )
     app.include_router(health.router, prefix="/api")
+    app.include_router(me.router, prefix="/api")
     return app
 
 

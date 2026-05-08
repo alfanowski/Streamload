@@ -6,9 +6,10 @@ from collections.abc import AsyncIterator
 
 import httpx
 import pytest_asyncio
+from sqlalchemy import text
 
 from streamload.api.app import create_app
-from streamload.db import init as db_init, shutdown as db_shutdown
+from streamload.db import get_session, init as db_init, shutdown as db_shutdown
 
 
 @pytest_asyncio.fixture
@@ -18,6 +19,11 @@ async def api_client() -> AsyncIterator[httpx.AsyncClient]:
         "postgresql+asyncpg://streamload:streamload@127.0.0.1:5432/streamload_test",
     )
     db_init(test_url)
+    # Truncate test tables so each test starts from a clean state.
+    async for db in get_session():
+        await db.execute(text("TRUNCATE users CASCADE"))
+        await db.commit()
+        break
     app = create_app()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:
