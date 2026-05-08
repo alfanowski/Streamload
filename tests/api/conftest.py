@@ -35,6 +35,11 @@ async def api_client() -> AsyncIterator[httpx.AsyncClient]:
     from streamload.db.session import _session_factory as f
     await _truncate_all(f)
 
+    # Reset rate limiters between tests for isolation.
+    from streamload.api.routes.auth import _login_limiter_per_ip, _login_limiter_per_user
+    _login_limiter_per_ip.reset()
+    _login_limiter_per_user.reset()
+
     app = create_app()
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test") as client:

@@ -48,6 +48,11 @@ class RateLimiter:
                 return True
             return False
 
+    def reset(self) -> None:
+        """Clear all bucket state (used for test isolation)."""
+        with self._lock:
+            self._buckets.clear()
+
     def remaining(self, key: str) -> int:
         """Number of tokens currently available for *key* (without consuming)."""
         now = time.monotonic()
