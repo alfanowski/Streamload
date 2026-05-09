@@ -90,3 +90,44 @@ def upgrade() -> None:
     )
     op.create_index("ix_events_user_occurred", "events", ["user_id", "occurred_at"])
     op.create_index("ix_events_type_occurred", "events", ["event_type", "occurred_at"])
+
+
+def downgrade() -> None:
+    op.drop_index("ix_events_type_occurred", table_name="events")
+    op.drop_index("ix_events_user_occurred", table_name="events")
+    op.drop_table("events")
+
+    op.drop_index("ix_search_history_user_executed", table_name="search_history")
+    op.drop_table("search_history")
+
+    op.drop_index("ix_watch_history_user_completed", table_name="watch_history")
+    op.drop_table("watch_history")
+
+    op.drop_table("user_settings")
+
+    op.add_column(
+        "watch_progress",
+        sa.Column("last_source", sa.Text(), nullable=True),
+    )
+
+    op.create_table(
+        "catalog_sources",
+        sa.Column("tmdb_id", sa.Integer(), nullable=False),
+        sa.Column("media_type", sa.Text(), nullable=False),
+        sa.Column("service_short_name", sa.Text(), nullable=False),
+        sa.Column("service_url", sa.Text(), nullable=False),
+        sa.Column("service_media_id", sa.Text(), nullable=False),
+        sa.Column("quality_max_height", sa.Integer(), nullable=True),
+        sa.Column("languages_audio", sa.ARRAY(sa.Text()), nullable=False, server_default="{}"),
+        sa.Column("languages_subs", sa.ARRAY(sa.Text()), nullable=False, server_default="{}"),
+        sa.Column("last_verified_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column("success_count", sa.Integer(), nullable=False, server_default="0"),
+        sa.Column("failure_count", sa.Integer(), nullable=False, server_default="0"),
+        sa.PrimaryKeyConstraint("tmdb_id", "media_type", "service_short_name"),
+        sa.ForeignKeyConstraint(
+            ["tmdb_id", "media_type"],
+            ["catalog_items.tmdb_id", "catalog_items.media_type"],
+            ondelete="CASCADE",
+        ),
+    )
+    op.create_index("ix_catalog_sources_service_short_name", "catalog_sources", ["service_short_name"])
