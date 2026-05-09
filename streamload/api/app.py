@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 from streamload.db import init as db_init, shutdown as db_shutdown
 
-from .routes import auth, catalog, collections, email, episodes, favorites, health, intro, library, me, passkey, play, progress, search, settings, stream, watchlist
+from .routes import admin, auth, catalog, collections, email, episodes, favorites, health, intro, library, me, passkey, play, progress, search, settings, stream, watchlist
 from .routes.catalog import admin_router as catalog_admin_router
 
 
@@ -59,6 +59,7 @@ def create_app() -> FastAPI:
     app.include_router(intro.router, prefix="/api")
     app.include_router(episodes.router, prefix="/api")
     app.include_router(settings.router, prefix="/api")
+    app.include_router(admin.router, prefix="/api")
     return app
 
 
