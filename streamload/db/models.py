@@ -44,7 +44,7 @@ class User(Base):
         DateTime(timezone=True), nullable=True,
     )
     email_required: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=True, server_default="true",
+        Boolean, nullable=False, default=False, server_default="false",
     )
     password_hash: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
     role: Mapped[str] = mapped_column(

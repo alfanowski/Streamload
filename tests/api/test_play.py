@@ -65,13 +65,21 @@ async def test_play_unknown_title_404(api_client: httpx.AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_play_requires_email_verified(api_client: httpx.AsyncClient):
-    # Register but DON'T verify
+async def test_play_blocks_user_with_email_required_unverified(api_client: httpx.AsyncClient):
+    """If an admin sets email_required=True and the user is unverified, play 403s."""
     r = await api_client.post("/api/auth/register", json={
         "username": "unveri", "email": "unveri@x.com", "password": "Hunter2!secret",
     })
     assert r.status_code == 201
-    # Insert catalog item
+
+    # Force email_required=True and clear verification.
+    async for db in gs():
+        u = (await db.execute(select(User).where(User.username == "unveri"))).scalar_one()
+        u.email_verified_at = None
+        u.email_required = True
+        await db.commit()
+        break
+
     async for db in gs():
         db.add(CatalogItem(tmdb_id=42, media_type="movie", title="X"))
         db.add(CatalogSource(

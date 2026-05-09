@@ -15,7 +15,8 @@ async def test_register_creates_user(api_client: httpx.AsyncClient):
     assert r.status_code == 201
     body = r.json()
     assert body["username"] == "alice"
-    assert body["email_verified"] is False
+    # Email verification is auto-completed at registration on this private platform.
+    assert body["email_verified"] is True
 
 
 @pytest.mark.asyncio

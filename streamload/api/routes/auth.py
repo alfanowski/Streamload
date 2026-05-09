@@ -9,13 +9,10 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from streamload.api.deps import SessionDep
-from streamload.auth.email_tokens import issue_token
 from streamload.auth.passwords import hash_password, verify_password
 from streamload.auth.rate_limit import RateLimiter
 from streamload.auth.sessions import create_session, delete_session
 from streamload.db.models import User
-from streamload.email import build_email_client
-from streamload.email.templates import verification_email
 from streamload.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -64,6 +61,8 @@ async def register(
         email=str(payload.email),
         password_hash=hash_password(payload.password),
         role="user",
+        email_required=False,
+        email_verified_at=datetime.now(UTC),
     )
     db.add(user)
     try:
@@ -72,18 +71,6 @@ async def register(
     except IntegrityError:
         await db.rollback()
         raise HTTPException(status.HTTP_409_CONFLICT, "username or email already in use")
-
-    # Issue verification token + send email (dry-run if no API key set).
-    tok = await issue_token(db, user_id=user.id, purpose="verify_email")
-    base = str(request.base_url).rstrip("/")
-    link = f"{base}/verify?token={tok}"
-    client = build_email_client()
-    subject, html, text = verification_email(username=user.username, link=link)
-    try:
-        await client.send(to=user.email, subject=subject, html=html, text=text)
-    except Exception:
-        log.warning("Failed to send verification email", exc_info=True)
-        # Do not fail registration if email is down.
 
     # Issue login session immediately.
     token = await create_session(
