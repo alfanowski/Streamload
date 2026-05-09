@@ -9,6 +9,7 @@ from pydantic import BaseModel
 from sqlalchemy import select
 
 from streamload.api.deps import CurrentUser, SessionDep
+from streamload.api.telemetry import emit as emit_event
 from streamload.auth.passkeys import (
     make_authentication_options,
     make_registration_options,
@@ -56,6 +57,7 @@ async def registration_verify(
     payload: RegistrationVerifyRequest,
     user: CurrentUser,
     db: SessionDep,
+    request: Request,
 ) -> dict[str, str]:
     try:
         cred_id, pub_key, transports = verify_registration(
@@ -73,6 +75,7 @@ async def registration_verify(
             nickname=payload.nickname,
         )
     )
+    await emit_event(db, request, user_id=user.id, event_type="auth.passkey_register")
     await db.commit()
     return {"status": "registered"}
 
