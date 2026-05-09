@@ -90,6 +90,33 @@ async def get_item(
     svc = CatalogService(db)
     item = await svc.get_item(tmdb_id)
 
+    # TMDB allocates IDs per namespace, so the same numeric id can map to a
+    # movie AND a TV series (e.g. id 1396 is both "Lo specchio" and "Breaking
+    # Bad"). Our catalog_items PK is the bare tmdb_id, so only one can live in
+    # cache at a time. When the caller's hint disagrees with what's cached, the
+    # hint wins: drop the cached row + sources + episodes + intro markers, then
+    # fall through to the lazy-ingest path below.
+    if item is not None and media_type is not None and item.media_type != media_type:
+        from sqlalchemy import delete
+        from streamload.db.models import (
+            CatalogItem,
+            CatalogSource,
+            CollectionItem,
+            IntroMarker,
+            TvEpisode,
+        )
+        log.info(
+            "media_type collision tmdb=%s: cached=%s, requested=%s — re-ingesting",
+            tmdb_id, item.media_type, media_type,
+        )
+        await db.execute(delete(CatalogSource).where(CatalogSource.tmdb_id == tmdb_id))
+        await db.execute(delete(TvEpisode).where(TvEpisode.tmdb_id == tmdb_id))
+        await db.execute(delete(IntroMarker).where(IntroMarker.tmdb_id == tmdb_id))
+        await db.execute(delete(CollectionItem).where(CollectionItem.tmdb_id == tmdb_id))
+        await db.execute(delete(CatalogItem).where(CatalogItem.tmdb_id == tmdb_id))
+        await db.commit()
+        item = None
+
     if item is None:
         # Lazy-ingest: not in catalog yet — fetch from TMDB + reverse-lookup,
         # persist, then re-read. For TV series, also pulls every season's
