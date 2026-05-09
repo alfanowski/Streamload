@@ -1,0 +1,42 @@
+name: Test
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test-backend:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: streamload
+          POSTGRES_PASSWORD: streamload
+          POSTGRES_DB: streamload_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd="pg_isready -U streamload"
+          --health-interval=5s
+          --health-timeout=3s
+          --health-retries=10
+    env:
+      DATABASE_URL_TEST: postgresql+asyncpg://streamload:streamload@127.0.0.1:5432/streamload_test
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install system deps
+        run: sudo apt-get update && sudo apt-get install -y libchromaprint-tools
+
+      - name: Install Python deps
+        run: pip install -r requirements-dev.txt
+
+      - name: Run tests
+        run: pytest -q --tb=short
