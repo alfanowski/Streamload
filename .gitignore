@@ -30,3 +30,4 @@ Thumbs.db
 tmp/
 secret/
 .superpowers/
+.claude/

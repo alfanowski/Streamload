@@ -1,8 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "Bash(git rm *)",
-      "Bash(venv/bin/python -c \"from streamload.api.app import create_app; create_app\\(\\)\")"
-    ]
-  }
-}
