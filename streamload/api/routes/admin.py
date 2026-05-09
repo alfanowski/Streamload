@@ -53,7 +53,7 @@ async def update_role(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, "role must be 'admin' or 'user'")
     u = (await db.execute(select(User).where(User.id == user_id))).scalar_one_or_none()
     if u is None:
-        return {"status": "not found"}
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "user not found")
     u.role = payload.role
     await db.commit()
     return {"status": "ok"}
