@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Streamload - Professional CLI Video Downloader"""
+"""Streamload backend launcher (v3 — API only).
+
+The v1 CLI mode was retired in v3; the desktop client supersedes it.
+"""
 
 import argparse
 import os
@@ -28,33 +31,31 @@ def _load_dotenv() -> None:
 
 
 def main():
-    if sys.version_info < (3, 10):
-        print(f"Streamload requires Python 3.10+. You have {sys.version_info.major}.{sys.version_info.minor}")
+    if sys.version_info < (3, 11):
+        print(
+            f"Streamload requires Python 3.11+. You have "
+            f"{sys.version_info.major}.{sys.version_info.minor}"
+        )
         sys.exit(1)
 
-    parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("--api", action="store_true", help="Start the API server")
+    parser = argparse.ArgumentParser(description="Streamload v3 backend")
+    parser.add_argument("--api", action="store_true", help="Start the API server (default)")
     args, _ = parser.parse_known_args()
 
-    if args.api:
-        _load_dotenv()
-        from granian import Granian
+    # API is the only supported mode in v3. The flag is preserved for
+    # backwards compatibility with existing systemd/docker invocations.
+    _load_dotenv()
+    from granian import Granian
 
-        server = Granian(
-            target="streamload.api.app:app",
-            address=os.environ.get("STREAMLOAD_API_HOST", "127.0.0.1"),
-            port=int(os.environ.get("STREAMLOAD_API_PORT", "8000")),
-            interface="asgi",
-            loop="auto",
-            workers=1,
-        )
-        server.serve()
-        sys.exit(0)
-
-    from streamload.cli.app import StreamloadApp
-
-    app = StreamloadApp()
-    app.run()
+    server = Granian(
+        target="streamload.api.app:app",
+        address=os.environ.get("STREAMLOAD_API_HOST", "127.0.0.1"),
+        port=int(os.environ.get("STREAMLOAD_API_PORT", "8000")),
+        interface="asgi",
+        loop="auto",
+        workers=1,
+    )
+    server.serve()
 
 
 if __name__ == "__main__":
