@@ -1,0 +1,48 @@
+# VCS
+.git/
+.gitignore
+.gitattributes
+
+# IDE
+.idea/
+.vscode/
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+venv/
+.venv/
+
+# Node
+node_modules/
+
+# Tests
+tests/
+**/test_*.py
+.coverage
+
+# Local data
+data/
+Video/
+streamload.log*
+.superpowers/
+
+# Secrets
+.env
+secret/
+config.json
+login.json
+
+# Documentation
+docs/
+README.md
+*.md
+
+# CI artifacts
+.github/

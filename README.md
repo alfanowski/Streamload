@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="https://img.shields.io/badge/Streamload-v0.1.1-blue?style=for-the-badge" alt="Version"/>
+  <img src="https://img.shields.io/badge/Streamload-v0.2.0-blue?style=for-the-badge" alt="Version"/>
   <img src="https://img.shields.io/badge/python-3.10+-3776AB?style=for-the-badge&logo=python&logoColor=white" alt="Python"/>
   <img src="https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-lightgrey?style=for-the-badge" alt="Platform"/>
   <img src="https://img.shields.io/badge/license-AGPL--3.0-green?style=for-the-badge" alt="License"/>
@@ -159,6 +159,23 @@ By using Streamload, you acknowledge and agree to the following terms:
 - **Acceptance.** By downloading, installing, or using Streamload, you indicate your full acceptance of these terms. If you do not agree with any part of this disclaimer, you must immediately cease all use of the software and delete all copies in your possession.
 
 **Use responsibly and respect content creators.**
+
+## v2 (Web Platform)
+
+Streamload v2 is a full web application deployed as a Docker stack on a home server (Acer + Ubuntu). It includes:
+
+- **Backend API** — FastAPI + PostgreSQL, serves `/api/*` and `/stream/*`
+- **Frontend SPA** — SvelteKit static app (PWA-installable, AirPlay + Cast, Vidstack player)
+- **TMDB catalog** — ~150+ titles across 8 collection rows, auto-refreshed
+- **Multi-user auth** — Password + Passkey (WebAuthn), email verification via Resend
+- **Auto-deploy** — GitHub Actions builds multi-arch Docker images to GHCR; Watchtower pulls on every push to `main` within 5 min
+- **Tailscale** — Stack is bound to the Tailscale interface; accessible on your tailnet only
+
+The frontend lives in the separate [`Streamload-Web`](https://github.com/alfanowski/Streamload-Web) repository (image: `ghcr.io/alfanowski/streamload-web`).
+
+For first-time production setup on the Acer, follow **[docs/deploy.md](docs/deploy.md)**.
+
+---
 
 ## API server (v2)
 

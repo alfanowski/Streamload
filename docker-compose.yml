@@ -1,0 +1,107 @@
+# Streamload production deployment.
+# Services:
+#   streamload-api  — backend (ghcr.io/alfanowski/streamload:latest)
+#   streamload-web  — frontend (ghcr.io/alfanowski/streamload-web:latest)
+#   postgres        — Postgres 16 with persistent volume
+#   caddy           — reverse proxy (routes /api/* → api, /* → web)
+#   watchtower      — auto-updates api + web images on GHCR push
+
+x-restart-policy: &restart unless-stopped
+
+services:
+  streamload-api:
+    image: ghcr.io/alfanowski/streamload:${STREAMLOAD_VERSION:-latest}
+    container_name: streamload-api
+    restart: *restart
+    depends_on:
+      postgres:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      DATABASE_URL: postgresql+asyncpg://streamload:${POSTGRES_PASSWORD}@postgres:5432/streamload
+    volumes:
+      - ./data:/app/data
+      - ./secret:/app/secret:ro
+      - ./config.json:/app/config.json:ro
+      - ./domains.json:/app/domains.json:ro
+      - ./domains.json.sig:/app/domains.json.sig:ro
+    networks:
+      - streamload-net
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+
+  streamload-web:
+    image: ghcr.io/alfanowski/streamload-web:${STREAMLOAD_WEB_VERSION:-latest}
+    container_name: streamload-web
+    restart: *restart
+    networks:
+      - streamload-net
+    labels:
+      com.centurylinklabs.watchtower.enable: "true"
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: streamload-postgres
+    restart: *restart
+    environment:
+      POSTGRES_USER: streamload
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: streamload
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U streamload"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - streamload-net
+    # Postgres must NOT be auto-updated (data risk on major version bumps)
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+
+  caddy:
+    image: caddy:2-alpine
+    container_name: streamload-caddy
+    restart: *restart
+    ports:
+      - "${BIND_HOST:-0.0.0.0}:80:80"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - streamload-net
+    depends_on:
+      - streamload-api
+      - streamload-web
+    labels:
+      com.centurylinklabs.watchtower.enable: "false"
+
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: streamload-watchtower
+    restart: *restart
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /etc/timezone:/etc/timezone:ro
+      - /etc/localtime:/etc/localtime:ro
+    environment:
+      WATCHTOWER_POLL_INTERVAL: 300
+      WATCHTOWER_CLEANUP: "true"
+      WATCHTOWER_LABEL_ENABLE: "true"
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+      WATCHTOWER_NOTIFICATIONS_LEVEL: info
+    labels:
+      # Don't update watchtower itself (avoid update-during-update edge cases)
+      com.centurylinklabs.watchtower.enable: "false"
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  streamload-net:
+    driver: bridge
