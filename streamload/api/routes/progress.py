@@ -1,4 +1,4 @@
-"""Watch progress endpoints."""
+"""Watch progress endpoints (v3 — no last_source field, watch_history side-effect)."""
 from __future__ import annotations
 
 from datetime import UTC, datetime
@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.dialects.postgresql import insert
 
 from streamload.api.deps import CurrentUser, SessionDep
-from streamload.db.models import CatalogItem, WatchProgress
+from streamload.db.models import CatalogItem, WatchHistory, WatchProgress
 
 router = APIRouter(tags=["progress"])
 
@@ -23,7 +23,6 @@ class PostProgressRequest(BaseModel):
     episode_number: int | None = None
     position_seconds: int = Field(ge=0)
     duration_seconds: int = Field(ge=1)
-    source: str | None = None
 
 
 class ProgressItem(BaseModel):
@@ -44,6 +43,20 @@ class ContinueWatchingResponse(BaseModel):
 @router.post("/progress")
 async def post_progress(payload: PostProgressRequest, user: CurrentUser, db: SessionDep) -> dict[str, str]:
     completed = (payload.position_seconds / payload.duration_seconds) >= WATCHED_THRESHOLD
+
+    # Was this row already completed before this update? Used to gate the
+    # watch_history insertion (only on the false → true transition).
+    prior = (await db.execute(
+        select(WatchProgress.completed).where(
+            WatchProgress.user_id == user.id,
+            WatchProgress.tmdb_id == payload.tmdb_id,
+            WatchProgress.media_type == payload.media_type,
+            WatchProgress.season_number == (payload.season_number or 0),
+            WatchProgress.episode_number == (payload.episode_number or 0),
+        )
+    )).scalar_one_or_none()
+    was_completed = bool(prior) if prior is not None else False
+
     stmt = insert(WatchProgress).values(
         user_id=user.id,
         tmdb_id=payload.tmdb_id,
@@ -53,7 +66,6 @@ async def post_progress(payload: PostProgressRequest, user: CurrentUser, db: Ses
         position_seconds=payload.position_seconds,
         duration_seconds=payload.duration_seconds,
         completed=completed,
-        last_source=payload.source,
         updated_at=datetime.now(UTC),
     ).on_conflict_do_update(
         index_elements=["user_id", "tmdb_id", "media_type", "season_number", "episode_number"],
@@ -61,11 +73,21 @@ async def post_progress(payload: PostProgressRequest, user: CurrentUser, db: Ses
             "position_seconds": payload.position_seconds,
             "duration_seconds": payload.duration_seconds,
             "completed": completed,
-            "last_source": payload.source,
             "updated_at": datetime.now(UTC),
         },
     )
     await db.execute(stmt)
+
+    if completed and not was_completed:
+        db.add(WatchHistory(
+            user_id=user.id,
+            tmdb_id=payload.tmdb_id,
+            media_type=payload.media_type,
+            season_number=payload.season_number or 0,
+            episode_number=payload.episode_number or 0,
+            completed_at=datetime.now(UTC),
+        ))
+
     await db.commit()
     return {"status": "ok", "completed": str(completed).lower()}
 
