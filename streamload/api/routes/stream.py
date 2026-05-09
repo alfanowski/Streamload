@@ -71,6 +71,33 @@ async def _fetch_upstream_text(url: str, headers: dict[str, str]) -> str:
 # Endpoints
 # ---------------------------------------------------------------------------
 
+async def _update_quality_if_needed(sess: object, upstream_text: str) -> None:
+    """Persist quality_max_height to catalog_sources on first master fetch."""
+    from streamload.streaming.quality_probe import max_height_from_master
+    from streamload.db.session import _session_factory
+    from streamload.db.models import CatalogSource
+    from sqlalchemy import select, update
+
+    height = max_height_from_master(upstream_text)
+    if height is None or _session_factory is None:
+        return
+    try:
+        async with _session_factory() as db:
+            result = await db.execute(
+                select(CatalogSource).where(
+                    CatalogSource.tmdb_id == sess.tmdb_id,  # type: ignore[union-attr]
+                    CatalogSource.service_short_name == sess.service_short_name,  # type: ignore[union-attr]
+                    CatalogSource.quality_max_height.is_(None),
+                )
+            )
+            source = result.scalar_one_or_none()
+            if source is not None:
+                source.quality_max_height = height
+                await db.commit()
+    except Exception:
+        pass  # Quality probe is best-effort; never fail the proxy response
+
+
 @router.get("/{session_id}/master.m3u8")
 async def proxy_master(session_id: uuid.UUID) -> Response:
     sess = registry.get(session_id, touch=True)
@@ -84,6 +111,9 @@ async def proxy_master(session_id: uuid.UUID) -> Response:
         session_id=str(session_id),
         base_path=f"/stream/{session_id}",
     )
+    # Best-effort quality probe — update catalog_sources if not yet set
+    import asyncio
+    asyncio.ensure_future(_update_quality_if_needed(sess, upstream_text))
     return Response(rewritten, media_type="application/x-mpegURL")
 
 
