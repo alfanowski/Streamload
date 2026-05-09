@@ -51,6 +51,8 @@ async def start_playback(
     user: CurrentUser,
     db: SessionDep,
     server: str | None = Query(default=None),
+    season: int | None = Query(default=None, ge=1),
+    episode: int | None = Query(default=None, ge=1),
 ) -> PlaybackResponse:
     if user.email_verified_at is None and user.email_required:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "email not verified")
@@ -86,6 +88,15 @@ async def start_playback(
     else:
         attempts = list(ranked)
 
+    is_tv = item.media_type == "tv"
+    # If this is a TV title and the caller didn't pick an episode, default to S1E1.
+    if is_tv:
+        season_number = season if season is not None else 1
+        episode_number = episode if episode is not None else 1
+    else:
+        season_number = None
+        episode_number = None
+
     last_error: Exception | None = None
     for candidate in attempts:
         service = _get_service(candidate.metrics.service_short_name)
@@ -96,6 +107,9 @@ async def start_playback(
                 service=service,
                 media_id=candidate.metrics.service_media_id,
                 media_url=candidate.metrics.service_url,
+                is_tv=is_tv,
+                season_number=season_number,
+                episode_number=episode_number,
             )
         except Exception as exc:
             last_error = exc

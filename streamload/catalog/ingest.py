@@ -14,11 +14,12 @@ from streamload.db.models import (
     CatalogSource,
     Collection,
     CollectionItem,
+    TvEpisode,
 )
 from streamload.utils.logger import get_logger
 
 from .match import best_match
-from .tmdb import TmdbItem
+from .tmdb import TmdbClient, TmdbItem
 
 log = get_logger(__name__)
 
@@ -168,18 +169,84 @@ async def ingest_collection(
     log.info("Ingest complete for %s", collection_id)
 
 
+async def _ingest_tv_episodes(
+    db: AsyncSession,
+    *,
+    tmdb_id: int,
+    seasons_count: int,
+    tmdb: TmdbClient,
+) -> int:
+    """Pull every season's episode list from TMDB and upsert into tv_episodes."""
+    from datetime import date as _date
+
+    inserted = 0
+    for season_number in range(1, (seasons_count or 0) + 1):
+        try:
+            data = await tmdb.get_tv_season(tmdb_id, season_number)
+        except Exception:
+            log.warning("TMDB season %s fetch failed for tmdb=%s", season_number, tmdb_id, exc_info=True)
+            continue
+        for ep in data.get("episodes", []):
+            air = ep.get("air_date")
+            air_d: _date | None = None
+            if isinstance(air, str) and len(air) >= 10:
+                try:
+                    air_d = _date.fromisoformat(air[:10])
+                except ValueError:
+                    air_d = None
+            still_url = None
+            if ep.get("still_path"):
+                still_url = f"https://image.tmdb.org/t/p/w300{ep['still_path']}"
+            stmt = insert(TvEpisode).values(
+                tmdb_id=tmdb_id,
+                season_number=season_number,
+                episode_number=int(ep.get("episode_number", 0)),
+                title=ep.get("name") or None,
+                overview=ep.get("overview") or None,
+                air_date=air_d,
+                runtime_minutes=ep.get("runtime"),
+                still_url=still_url,
+            ).on_conflict_do_update(
+                index_elements=["tmdb_id", "season_number", "episode_number"],
+                set_={
+                    "title": ep.get("name") or None,
+                    "overview": ep.get("overview") or None,
+                    "air_date": air_d,
+                    "runtime_minutes": ep.get("runtime"),
+                    "still_url": still_url,
+                },
+            )
+            await db.execute(stmt)
+            inserted += 1
+    return inserted
+
+
 async def ingest_single_title(
     db: AsyncSession,
     *,
     item: TmdbItem,
     services: list[Any],
+    tmdb: TmdbClient | None = None,
 ) -> int:
     """Ingest one title on-demand: persist metadata + reverse-lookup sources.
+
+    For TV series (and when *tmdb* is supplied) also pulls every season's
+    episode list from TMDB into the tv_episodes table.
 
     Returns the number of services that produced a match. Caller commits.
     """
     log.info("Lazy-ingest tmdb_id=%s (%s)", item.tmdb_id, item.title)
     await _upsert_catalog_item(db, item)
+
+    if item.media_type == "tv" and tmdb is not None and (item.seasons_count or 0) > 0:
+        try:
+            n = await _ingest_tv_episodes(
+                db, tmdb_id=item.tmdb_id, seasons_count=item.seasons_count, tmdb=tmdb,
+            )
+            log.info("Ingested %d episodes for tmdb=%s", n, item.tmdb_id)
+        except Exception:
+            log.warning("Episode ingestion failed for tmdb=%s", item.tmdb_id, exc_info=True)
+
     sem = asyncio.Semaphore(REVERSE_LOOKUP_CONCURRENCY)
     matched = await _resolve_sources_for_item(db, item, services, sem)
     await db.commit()

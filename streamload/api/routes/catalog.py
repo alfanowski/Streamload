@@ -42,25 +42,22 @@ class CatalogItemResponse(BaseModel):
     sources: list[SourceResponse]
 
 
-async def _fetch_tmdb_item(tmdb_id: int, media_type: Optional[str]) -> Optional[TmdbItem]:
-    """Fetch metadata from TMDB. Tries the requested media_type first, then falls
-    back to the other (TMDB IDs are *not* unique across the movie/tv namespaces)."""
-    api_key = os.environ.get("TMDB_API_KEY", "")
-    if not api_key:
-        return None
+async def _fetch_tmdb_item(
+    client: TmdbClient, tmdb_id: int, media_type: Optional[str],
+) -> Optional[TmdbItem]:
+    """Try the requested media_type first, then the other (TMDB IDs are *not*
+    unique across the movie/tv namespaces)."""
     order = ["movie", "tv"] if media_type != "tv" else ["tv", "movie"]
-    async with httpx.AsyncClient(timeout=15) as http:
-        client = TmdbClient(api_key=api_key, http=http)
-        for mt in order:
-            try:
-                return await client.get_movie(tmdb_id) if mt == "movie" else await client.get_tv(tmdb_id)
-            except httpx.HTTPStatusError as e:
-                if e.response.status_code != 404:
-                    log.warning("TMDB %s/%s error: %s", mt, tmdb_id, e)
-                continue
-            except Exception:
-                log.warning("TMDB lookup failed for %s/%s", mt, tmdb_id, exc_info=True)
-                continue
+    for mt in order:
+        try:
+            return await client.get_movie(tmdb_id) if mt == "movie" else await client.get_tv(tmdb_id)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code != 404:
+                log.warning("TMDB %s/%s error: %s", mt, tmdb_id, e)
+            continue
+        except Exception:
+            log.warning("TMDB lookup failed for %s/%s", mt, tmdb_id, exc_info=True)
+            continue
     return None
 
 
@@ -95,16 +92,21 @@ async def get_item(
 
     if item is None:
         # Lazy-ingest: not in catalog yet — fetch from TMDB + reverse-lookup,
-        # persist, then re-read. This is what makes "search → click any title"
-        # work even for titles that were never part of a curated collection.
-        tmdb_item = await _fetch_tmdb_item(tmdb_id, media_type)
-        if tmdb_item is None:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "title not found on TMDB")
-        from streamload.services import ServiceRegistry, load_services
-        from streamload.utils.http import HttpClient
-        load_services()
-        services = [cls(HttpClient()) for cls in ServiceRegistry.get_all()]
-        await ingest_single_title(db, item=tmdb_item, services=services)
+        # persist, then re-read. For TV series, also pulls every season's
+        # episode list into tv_episodes.
+        api_key = os.environ.get("TMDB_API_KEY", "")
+        if not api_key:
+            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "TMDB key missing on server")
+        async with httpx.AsyncClient(timeout=15) as http:
+            tmdb = TmdbClient(api_key=api_key, http=http)
+            tmdb_item = await _fetch_tmdb_item(tmdb, tmdb_id, media_type)
+            if tmdb_item is None:
+                raise HTTPException(status.HTTP_404_NOT_FOUND, "title not found on TMDB")
+            from streamload.services import ServiceRegistry, load_services
+            from streamload.utils.http import HttpClient
+            load_services()
+            services = [cls(HttpClient()) for cls in ServiceRegistry.get_all()]
+            await ingest_single_title(db, item=tmdb_item, services=services, tmdb=tmdb)
         item = await svc.get_item(tmdb_id)
         if item is None:
             raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "ingest failed")

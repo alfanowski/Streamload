@@ -153,6 +153,10 @@ class TmdbClient:
         data = await self._get(f"/tv/{tmdb_id}")
         return self._parse_tv(data)
 
+    async def get_tv_season(self, tmdb_id: int, season_number: int) -> dict:
+        """Raw season payload — caller picks the fields it cares about."""
+        return await self._get(f"/tv/{tmdb_id}/season/{season_number}")
+
     async def search_multi(self, query: str, *, page: int = 1) -> list[TmdbItem]:
         data = await self._get("/search/multi", {"query": query, "page": page})
         results = []
