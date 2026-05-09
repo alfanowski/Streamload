@@ -257,3 +257,51 @@ class TvEpisode(Base):
     air_date: Mapped[Optional[Date]] = mapped_column(Date)
     runtime_minutes: Mapped[Optional[int]] = mapped_column(Integer)
     still_url: Mapped[Optional[str]] = mapped_column(Text)
+
+
+class WatchProgress(Base):
+    __tablename__ = "watch_progress"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True,
+    )
+    tmdb_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("catalog_items.tmdb_id", ondelete="CASCADE"), primary_key=True,
+    )
+    season_number: Mapped[int] = mapped_column(Integer, primary_key=True, default=0, server_default="0")
+    episode_number: Mapped[int] = mapped_column(Integer, primary_key=True, default=0, server_default="0")
+    position_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
+    last_source: Mapped[Optional[str]] = mapped_column(Text)
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+
+
+class Favorite(Base):
+    __tablename__ = "favorites"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True,
+    )
+    tmdb_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("catalog_items.tmdb_id", ondelete="CASCADE"), primary_key=True,
+    )
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+
+
+class Watchlist(Base):
+    __tablename__ = "watchlist"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True,
+    )
+    tmdb_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("catalog_items.tmdb_id", ondelete="CASCADE"), primary_key=True,
+    )
+    added_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
