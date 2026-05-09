@@ -24,6 +24,7 @@ from sqlalchemy import (
     String,
     Text,
     func,
+    text,
 )
 from sqlalchemy.dialects.postgresql import INET, JSONB, UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -344,4 +345,82 @@ class IntroMarker(Base):
             ["catalog_items.tmdb_id", "catalog_items.media_type"],
             ondelete="CASCADE",
         ),
+    )
+
+
+class UserSettings(Base):
+    __tablename__ = "user_settings"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True,
+    )
+    audio_pref_lang: Mapped[str] = mapped_column(Text, nullable=False, server_default="ita")
+    subs_pref_lang: Mapped[str] = mapped_column(Text, nullable=False, server_default="ita")
+    quality_cap_height: Mapped[Optional[int]] = mapped_column(Integer, nullable=True)
+    autoplay_next_episode: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    skip_intro: Mapped[bool] = mapped_column(Boolean, nullable=False, server_default="true")
+    theme: Mapped[str] = mapped_column(Text, nullable=False, server_default="auto")
+    locale: Mapped[str] = mapped_column(Text, nullable=False, server_default="it-IT")
+    updated_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+
+    __table_args__ = (
+        CheckConstraint("theme IN ('auto', 'light', 'dark')", name="ck_user_settings_theme"),
+    )
+
+
+class WatchHistory(Base):
+    __tablename__ = "watch_history"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True,
+    )
+    tmdb_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    media_type: Mapped[str] = mapped_column(Text, primary_key=True)
+    season_number: Mapped[int] = mapped_column(Integer, primary_key=True, default=0, server_default="0")
+    episode_number: Mapped[int] = mapped_column(Integer, primary_key=True, default=0, server_default="0")
+    completed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), primary_key=True, server_default=func.now(),
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tmdb_id", "media_type"],
+            ["catalog_items.tmdb_id", "catalog_items.media_type"],
+            ondelete="CASCADE",
+        ),
+    )
+
+
+class SearchHistory(Base):
+    __tablename__ = "search_history"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), nullable=False,
+    )
+    query_text: Mapped[str] = mapped_column(Text, nullable=False)
+    query_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    executed_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+
+
+class Event(Base):
+    __tablename__ = "events"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    user_id: Mapped[Optional[uuid.UUID]] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="SET NULL"), nullable=True,
+    )
+    event_type: Mapped[str] = mapped_column(Text, nullable=False)
+    payload: Mapped[dict] = mapped_column(
+        JSONB, nullable=False, server_default=text("'{}'::jsonb"),
+    )
+    ip: Mapped[Optional[str]] = mapped_column(INET, nullable=True)
+    user_agent: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    app_version: Mapped[Optional[str]] = mapped_column(Text, nullable=True)
+    occurred_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, server_default=func.now(),
     )
