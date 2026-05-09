@@ -198,6 +198,51 @@ async def proxy_media_audio(session_id: uuid.UUID, lang: str) -> Response:
     return Response(rewritten, media_type="application/x-mpegURL")
 
 
+@router.get("/{session_id}/key/{rendition}")
+async def proxy_aes_key(session_id: uuid.UUID, rendition: str) -> Response:
+    """Proxy the upstream AES-128 key for HLS clear-key encryption.
+
+    The upstream media playlist contains an `#EXT-X-KEY` whose URI we rewrite
+    to point here. We re-fetch the upstream playlist for the rendition, parse
+    the key URI, resolve it (it's typically relative — `/storage/enc.key`)
+    against the rendition URL, and stream the 16-byte key body back.
+    """
+    from urllib.parse import urljoin
+
+    sess = registry.get(session_id, touch=True)
+    if sess is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "session expired or unknown")
+
+    master_text = await _fetch_upstream_text(
+        sess.upstream_master_url, sess.upstream_headers,
+    )
+    rendition_url: Optional[str] = None
+    for line in master_text.split("\n"):
+        if not line.startswith("#") and rendition in line and line.strip():
+            rendition_url = line.strip()
+            break
+    if rendition_url is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"rendition {rendition!r} not found")
+
+    media_text = await _fetch_upstream_text(rendition_url, sess.upstream_headers)
+    key_uri: Optional[str] = None
+    for line in media_text.split("\n"):
+        if line.startswith("#EXT-X-KEY:"):
+            m = re.search(r'URI="([^"]+)"', line)
+            if m:
+                key_uri = m.group(1)
+                break
+    if key_uri is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "no AES-128 key in playlist")
+
+    # Resolve relative URI against the rendition URL.
+    absolute_key_url = urljoin(rendition_url, key_uri)
+    http = _get_http()
+    r = await http.get(absolute_key_url, headers=sess.upstream_headers)
+    r.raise_for_status()
+    return Response(r.content, media_type="application/octet-stream")
+
+
 @router.get("/{session_id}/seg/{rendition}/{n}.ts")
 async def proxy_segment(session_id: uuid.UUID, rendition: str, n: int) -> Response:
     """Fetch segment N for the given rendition, with cache + DRM decrypt."""

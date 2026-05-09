@@ -80,10 +80,22 @@ def rewrite_master(text: str, *, session_id: str, base_path: str) -> str:
 
 
 def rewrite_media(text: str, *, session_id: str, rendition: str, base_path: str) -> str:
-    """Replace segment URIs in a media playlist."""
+    """Replace segment + AES-128 key URIs in a media playlist.
+
+    AES-128 stream encryption keys carry an absolute or relative URI (often
+    something like ``/storage/enc.key`` on the upstream origin) that the player
+    must fetch. We rewrite that URI to point at our proxy so cookies / origin
+    checks don't leak the upstream domain.
+    """
     out_lines: list[str] = []
     seg_index = 0
     for line in text.split("\n"):
+        # AES-128 key — rewrite URI attribute.
+        if line.startswith("#EXT-X-KEY:"):
+            new_uri = f"{base_path}/key/{rendition}"
+            line = _URI_ATTR_RE.sub(f'URI="{new_uri}"', line, count=1)
+            out_lines.append(line)
+            continue
         # Segment URLs are non-comment, non-empty lines
         if line and not line.startswith("#"):
             out_lines.append(f"{base_path}/seg/{rendition}/{seg_index}.ts")
