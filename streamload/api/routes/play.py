@@ -88,6 +88,7 @@ async def start_playback(
         tmdb_id=tmdb_id,
         service=service,
         media_id=chosen.metrics.service_media_id,
+        media_url=chosen.metrics.service_url,
     )
     return PlaybackResponse(
         session_id=str(sess.id),

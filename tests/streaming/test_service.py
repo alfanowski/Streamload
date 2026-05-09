@@ -22,6 +22,7 @@ async def test_build_session_for_non_drm_movie():
 
     sess = await build_playback_session(
         user_id=uuid.uuid4(), tmdb_id=42, service=fake_service, media_id="m1",
+        media_url="https://x/it/titles/1-foo",
     )
     assert sess.is_drm is False
     assert sess.upstream_master_url.startswith("https://upstream")
@@ -41,6 +42,7 @@ async def test_build_session_for_drm_keeps_keys():
 
     sess = await build_playback_session(
         user_id=uuid.uuid4(), tmdb_id=42, service=fake_service, media_id="m1",
+        media_url="https://x/it/titles/1-foo",
     )
     assert sess.is_drm is True
     assert sess.drm_keys == [{"kid": "x", "key": "y"}]

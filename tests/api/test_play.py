@@ -54,7 +54,7 @@ async def test_play_creates_session(api_client: httpx.AsyncClient):
     body = r.json()
     assert "session_id" in body
     assert body["master_url"].startswith("/stream/")
-    assert body["current_server"] == "Server 1"
+    assert body["current_server"] == "StreamingCommunity"
 
 
 @pytest.mark.asyncio
