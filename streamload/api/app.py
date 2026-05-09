@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 from streamload.db import init as db_init, shutdown as db_shutdown
 
-from .routes import auth, catalog, collections, email, health, me, passkey, search
+from .routes import auth, catalog, collections, email, health, me, passkey, play, search, stream
 from .routes.catalog import admin_router as catalog_admin_router
 
 
@@ -24,6 +24,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        # Close the streaming HTTP singleton if it was created.
+        from streamload.api.routes.stream import shutdown_http
+        await shutdown_http()
         await db_shutdown()
 
 
@@ -47,6 +50,8 @@ def create_app() -> FastAPI:
     app.include_router(me.router, prefix="/api")
     app.include_router(passkey.router, prefix="/api")
     app.include_router(search.router, prefix="/api")
+    app.include_router(play.router, prefix="/api")
+    app.include_router(stream.router)  # mounted at /stream (no /api/ prefix)
     return app
 
 
