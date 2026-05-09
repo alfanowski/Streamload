@@ -23,6 +23,23 @@ router = APIRouter(prefix="/stream", tags=["stream"])
 
 _disk_cache: Optional[SegmentCache] = None
 _ram_buffers: dict[uuid.UUID, RamRingBuffer] = {}
+_global_http: Optional[httpx.AsyncClient] = None
+
+
+def _get_http() -> httpx.AsyncClient:
+    """Module-level singleton httpx client (cleaned up at app shutdown)."""
+    global _global_http
+    if _global_http is None:
+        _global_http = httpx.AsyncClient(timeout=30)
+    return _global_http
+
+
+async def shutdown_http() -> None:
+    """Close the singleton client. Called from app lifespan."""
+    global _global_http
+    if _global_http is not None:
+        await _global_http.aclose()
+        _global_http = None
 
 
 def _get_disk_cache() -> SegmentCache:
@@ -49,7 +66,7 @@ def seg_fetcher_for_session(session_id: uuid.UUID) -> SegmentFetcher:
     if sess is not None and sess.is_drm:
         decryptor = build_decryptor(keys=sess.drm_keys)
     return SegmentFetcher(
-        http=httpx.AsyncClient(timeout=30),
+        http=_get_http(),
         ram=_get_ram_buffer(session_id),
         disk=_get_disk_cache(),
         decryptor=decryptor,
@@ -61,10 +78,10 @@ def seg_fetcher_for_session(session_id: uuid.UUID) -> SegmentFetcher:
 # ---------------------------------------------------------------------------
 
 async def _fetch_upstream_text(url: str, headers: dict[str, str]) -> str:
-    async with httpx.AsyncClient(timeout=15) as http:
-        r = await http.get(url, headers=headers)
-        r.raise_for_status()
-        return r.text
+    http = _get_http()
+    r = await http.get(url, headers=headers)
+    r.raise_for_status()
+    return r.text
 
 
 # ---------------------------------------------------------------------------

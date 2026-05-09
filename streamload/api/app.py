@@ -24,6 +24,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     try:
         yield
     finally:
+        # Close the streaming HTTP singleton if it was created.
+        from streamload.api.routes.stream import shutdown_http
+        await shutdown_http()
         await db_shutdown()
 
 
