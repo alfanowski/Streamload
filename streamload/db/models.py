@@ -305,3 +305,24 @@ class Watchlist(Base):
     added_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(),
     )
+
+
+class IntroMarker(Base):
+    __tablename__ = "intro_markers"
+
+    tmdb_id: Mapped[int] = mapped_column(
+        Integer, ForeignKey("catalog_items.tmdb_id", ondelete="CASCADE"), primary_key=True,
+    )
+    season_number: Mapped[int] = mapped_column(Integer, primary_key=True)
+    intro_start_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    intro_end_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
+    outro_start_seconds: Mapped[Optional[int]] = mapped_column(Integer)
+    detected_by: Mapped[str] = mapped_column(Text, nullable=False)
+    confidence: Mapped[Optional[float]] = mapped_column(Numeric(3, 2))
+
+    __table_args__ = (
+        CheckConstraint(
+            "detected_by IN ('fingerprint', 'manual')",
+            name="ck_intro_markers_detected_by",
+        ),
+    )
