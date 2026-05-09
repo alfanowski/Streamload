@@ -36,9 +36,16 @@ def test_rewrite_master_replaces_audio_uris():
     assert "upstream" not in out
 
 
-def test_rewrite_master_replaces_subtitle_uris():
+def test_rewrite_master_strips_subtitle_tracks():
+    """Subtitles are dropped from the master: HLS requires SUBTITLES URIs to
+    point at a segmented .m3u8 playlist, but our upstream gives a raw .vtt.
+    Including a malformed SUBTITLES track makes hls.js abort with
+    levelParsingError. Subtitles are surfaced via the HTML <track> element
+    side-channel, not through HLS."""
     out = rewrite_master(MASTER_SAMPLE, session_id="sid", base_path="/stream/sid")
-    assert "/stream/sid/sub/ita.vtt" in out
+    assert "TYPE=SUBTITLES" not in out
+    # And STREAM-INF should not reference the now-missing subtitle group.
+    assert 'SUBTITLES="subs"' not in out
 
 
 def test_rewrite_master_preserves_stream_inf_attributes():

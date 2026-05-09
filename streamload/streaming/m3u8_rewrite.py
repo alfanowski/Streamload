@@ -42,17 +42,24 @@ def rewrite_master(text: str, *, session_id: str, base_path: str) -> str:
     while i < len(lines):
         line = lines[i]
 
-        # Audio/Subtitle media tags carry URI in attributes
+        # Audio media tags — rewrite. Drop subtitles entirely: HLS requires
+        # SUBTITLES URIs to point at a .m3u8 segmented WebVTT playlist, but
+        # upstream just gives us a plain .vtt file. Including a malformed
+        # subtitle track makes hls.js abort with levelParsingError. Strip the
+        # SUBTITLES MEDIA tags here and remove the SUBTITLES="..." attribute
+        # from STREAM-INF below.
         if line.startswith("#EXT-X-MEDIA:"):
-            uri_m = _URI_ATTR_RE.search(line)
             type_m = re.search(r"TYPE=(\w+)", line)
+            uri_m = _URI_ATTR_RE.search(line)
             lang_m = re.search(r'LANGUAGE="([^"]+)"', line)
+            if type_m and type_m.group(1) == "SUBTITLES":
+                # Skip this declaration entirely.
+                i += 1
+                continue
             if uri_m and type_m and lang_m:
                 lang = lang_m.group(1)
                 if type_m.group(1) == "AUDIO":
                     new_uri = f"{base_path}/audio/{lang}.m3u8"
-                elif type_m.group(1) == "SUBTITLES":
-                    new_uri = f"{base_path}/sub/{lang}.vtt"
                 else:
                     new_uri = uri_m.group(1)
                 line = line[:uri_m.start()] + f'URI="{new_uri}"' + line[uri_m.end():]
@@ -62,7 +69,11 @@ def rewrite_master(text: str, *, session_id: str, base_path: str) -> str:
 
         # STREAM-INF is followed by a URI on the next line
         if line.startswith("#EXT-X-STREAM-INF:"):
-            out_lines.append(line)
+            # Strip SUBTITLES="..." from the attribute list so the player
+            # doesn't try to reference a subtitle group we just removed.
+            cleaned = re.sub(r',?\s*SUBTITLES="[^"]*"', "", line)
+            cleaned = re.sub(r":\s*,", ":", cleaned)  # tidy stray comma
+            out_lines.append(cleaned)
             i += 1
             if i < len(lines):
                 upstream_url = lines[i].strip()
