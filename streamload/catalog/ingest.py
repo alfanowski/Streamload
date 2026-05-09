@@ -23,6 +23,7 @@ from .tmdb import TmdbItem
 log = get_logger(__name__)
 
 REVERSE_LOOKUP_CONCURRENCY = 8
+REVERSE_LOOKUP_PER_SERVICE_TIMEOUT_SECONDS = 8.0
 
 
 async def _upsert_catalog_item(db: AsyncSession, item: TmdbItem) -> None:
@@ -70,7 +71,16 @@ async def _resolve_sources_for_item(
     for svc in services:
         async with sem:
             try:
-                results = await svc.search_async(item.title)
+                results = await asyncio.wait_for(
+                    svc.search_async(item.title),
+                    timeout=REVERSE_LOOKUP_PER_SERVICE_TIMEOUT_SECONDS,
+                )
+            except asyncio.TimeoutError:
+                log.info(
+                    "Service %s timed out (>%ss) for %r — skipping",
+                    svc.short_name, REVERSE_LOOKUP_PER_SERVICE_TIMEOUT_SECONDS, item.title,
+                )
+                continue
             except Exception:
                 log.warning("Service %s search failed for %r", svc.short_name, item.title, exc_info=True)
                 continue
