@@ -1,5 +1,5 @@
 from streamload.db.models import (
-    CatalogItem, CatalogSource, Collection, CollectionItem, TvEpisode,
+    CatalogItem, Collection, CollectionItem, TvEpisode,
 )
 
 
@@ -14,11 +14,6 @@ def test_catalog_item_columns():
 def test_catalog_item_pk():
     pk = {c.name for c in CatalogItem.__table__.primary_key.columns}
     assert pk == {"tmdb_id", "media_type"}
-
-
-def test_catalog_source_pk():
-    pk = {c.name for c in CatalogSource.__table__.primary_key.columns}
-    assert pk == {"tmdb_id", "media_type", "service_short_name"}
 
 
 def test_collection_columns():

@@ -189,40 +189,8 @@ class CatalogItem(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(),
     )
 
-    sources: Mapped[list["CatalogSource"]] = relationship(
-        back_populates="item", cascade="all, delete-orphan",
-    )
-
     __table_args__ = (
         CheckConstraint("media_type IN ('movie', 'tv')", name="ck_catalog_items_media_type"),
-    )
-
-
-class CatalogSource(Base):
-    __tablename__ = "catalog_sources"
-
-    tmdb_id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    media_type: Mapped[str] = mapped_column(Text, primary_key=True)
-    service_short_name: Mapped[str] = mapped_column(Text, primary_key=True, index=True)
-    service_url: Mapped[str] = mapped_column(Text, nullable=False)
-    service_media_id: Mapped[str] = mapped_column(Text, nullable=False)
-    quality_max_height: Mapped[Optional[int]] = mapped_column(Integer)
-    languages_audio: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list, server_default="{}")
-    languages_subs: Mapped[list[str]] = mapped_column(ARRAY(Text), nullable=False, default=list, server_default="{}")
-    last_verified_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), nullable=False, server_default=func.now(),
-    )
-    success_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-    failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
-
-    item: Mapped[CatalogItem] = relationship(back_populates="sources")
-
-    __table_args__ = (
-        ForeignKeyConstraint(
-            ["tmdb_id", "media_type"],
-            ["catalog_items.tmdb_id", "catalog_items.media_type"],
-            ondelete="CASCADE",
-        ),
     )
 
 
@@ -298,7 +266,6 @@ class WatchProgress(Base):
     position_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     duration_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     completed: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False, server_default="false")
-    last_source: Mapped[Optional[str]] = mapped_column(Text)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(),
     )
