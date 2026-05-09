@@ -11,8 +11,7 @@ from fastapi import FastAPI
 from streamload.db import init as db_init, shutdown as db_shutdown
 from streamload.utils.logger import get_logger
 
-from .routes import admin, auth, catalog, collections, email, episodes, favorites, health, intro, library, me, passkey, play, progress, search, settings, stream, watchlist
-from .routes.catalog import admin_router as catalog_admin_router
+from .routes import admin, auth, catalog, collections, email, episodes, favorites, health, intro, library, me, passkey, progress, search, settings, watchlist
 
 log = get_logger(__name__)
 
@@ -38,8 +37,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except (asyncio.CancelledError, Exception):
             pass
 
-        from streamload.api.routes.stream import shutdown_http
-        await shutdown_http()
         await db_shutdown()
 
 
@@ -145,15 +142,12 @@ def create_app() -> FastAPI:
     )
     app.include_router(auth.router, prefix="/api")
     app.include_router(catalog.router, prefix="/api")
-    app.include_router(catalog_admin_router, prefix="/api")
     app.include_router(collections.router, prefix="/api")
     app.include_router(email.router, prefix="/api")
     app.include_router(health.router, prefix="/api")
     app.include_router(me.router, prefix="/api")
     app.include_router(passkey.router, prefix="/api")
     app.include_router(search.router, prefix="/api")
-    app.include_router(play.router, prefix="/api")
-    app.include_router(stream.router)  # mounted at /stream (no /api/ prefix)
     app.include_router(progress.router, prefix="/api")
     app.include_router(favorites.router, prefix="/api")
     app.include_router(watchlist.router, prefix="/api")
