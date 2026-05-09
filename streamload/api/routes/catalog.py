@@ -96,7 +96,7 @@ async def get_item(
         # episode list into tv_episodes.
         api_key = os.environ.get("TMDB_API_KEY", "")
         if not api_key:
-            raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "TMDB key missing on server")
+            raise HTTPException(status.HTTP_404_NOT_FOUND, "title not found in catalog")
         async with httpx.AsyncClient(timeout=15) as http:
             tmdb = TmdbClient(api_key=api_key, http=http)
             tmdb_item = await _fetch_tmdb_item(tmdb, tmdb_id, media_type)
@@ -110,6 +110,33 @@ async def get_item(
         item = await svc.get_item(tmdb_id)
         if item is None:
             raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "ingest failed")
+
+    # Backfill episodes for series ingested before episode support existed
+    # (i.e. titles seeded via popular-tv / trending-day collections).
+    if item.media_type == "tv" and (item.seasons_count or 0) > 0:
+        from sqlalchemy import select, func
+        from streamload.db.models import TvEpisode
+        from streamload.catalog.ingest import _ingest_tv_episodes
+
+        ep_count = (await db.execute(
+            select(func.count()).select_from(TvEpisode).where(TvEpisode.tmdb_id == tmdb_id)
+        )).scalar_one()
+        if ep_count == 0:
+            api_key = os.environ.get("TMDB_API_KEY", "")
+            if api_key:
+                async with httpx.AsyncClient(timeout=15) as http:
+                    tmdb = TmdbClient(api_key=api_key, http=http)
+                    try:
+                        await _ingest_tv_episodes(
+                            db, tmdb_id=tmdb_id,
+                            seasons_count=item.seasons_count,
+                            tmdb=tmdb,
+                        )
+                        await db.commit()
+                    except Exception:
+                        log.warning("Episode backfill failed for tmdb=%s", tmdb_id, exc_info=True)
+                        await db.rollback()
+
     return CatalogItemResponse(
         tmdb_id=item.tmdb_id,
         media_type=item.media_type,
