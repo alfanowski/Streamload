@@ -11,9 +11,14 @@ def test_catalog_item_columns():
             "metadata_fetched_at"} <= cols
 
 
+def test_catalog_item_pk():
+    pk = {c.name for c in CatalogItem.__table__.primary_key.columns}
+    assert pk == {"tmdb_id", "media_type"}
+
+
 def test_catalog_source_pk():
     pk = {c.name for c in CatalogSource.__table__.primary_key.columns}
-    assert pk == {"tmdb_id", "service_short_name"}
+    assert pk == {"tmdb_id", "media_type", "service_short_name"}
 
 
 def test_collection_columns():
@@ -24,9 +29,9 @@ def test_collection_columns():
 
 def test_collection_item_pk():
     pk = {c.name for c in CollectionItem.__table__.primary_key.columns}
-    assert pk == {"collection_id", "tmdb_id"}
+    assert pk == {"collection_id", "tmdb_id", "media_type"}
 
 
 def test_tv_episode_pk():
     pk = {c.name for c in TvEpisode.__table__.primary_key.columns}
-    assert pk == {"tmdb_id", "season_number", "episode_number"}
+    assert pk == {"tmdb_id", "media_type", "season_number", "episode_number"}

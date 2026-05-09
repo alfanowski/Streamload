@@ -88,34 +88,11 @@ async def get_item(
     media_type: Optional[str] = None,
 ) -> CatalogItemResponse:
     svc = CatalogService(db)
-    item = await svc.get_item(tmdb_id)
-
-    # TMDB allocates IDs per namespace, so the same numeric id can map to a
-    # movie AND a TV series (e.g. id 1396 is both "Lo specchio" and "Breaking
-    # Bad"). Our catalog_items PK is the bare tmdb_id, so only one can live in
-    # cache at a time. When the caller's hint disagrees with what's cached, the
-    # hint wins: drop the cached row + sources + episodes + intro markers, then
-    # fall through to the lazy-ingest path below.
-    if item is not None and media_type is not None and item.media_type != media_type:
-        from sqlalchemy import delete
-        from streamload.db.models import (
-            CatalogItem,
-            CatalogSource,
-            CollectionItem,
-            IntroMarker,
-            TvEpisode,
-        )
-        log.info(
-            "media_type collision tmdb=%s: cached=%s, requested=%s — re-ingesting",
-            tmdb_id, item.media_type, media_type,
-        )
-        await db.execute(delete(CatalogSource).where(CatalogSource.tmdb_id == tmdb_id))
-        await db.execute(delete(TvEpisode).where(TvEpisode.tmdb_id == tmdb_id))
-        await db.execute(delete(IntroMarker).where(IntroMarker.tmdb_id == tmdb_id))
-        await db.execute(delete(CollectionItem).where(CollectionItem.tmdb_id == tmdb_id))
-        await db.execute(delete(CatalogItem).where(CatalogItem.tmdb_id == tmdb_id))
-        await db.commit()
-        item = None
+    # The (tmdb_id, media_type) PK lets a movie and a TV series with the same
+    # numeric id co-exist (TMDB uses separate namespaces). The caller passes
+    # the media_type hint along from the search result so we always serve the
+    # right one without an ambiguous lookup.
+    item = await svc.get_item(tmdb_id, media_type=media_type)
 
     if item is None:
         # Lazy-ingest: not in catalog yet — fetch from TMDB + reverse-lookup,
@@ -134,7 +111,7 @@ async def get_item(
             load_services()
             services = [cls(HttpClient()) for cls in ServiceRegistry.get_all()]
             await ingest_single_title(db, item=tmdb_item, services=services, tmdb=tmdb)
-        item = await svc.get_item(tmdb_id)
+        item = await svc.get_item(tmdb_id, media_type=tmdb_item.media_type)
         if item is None:
             raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "ingest failed")
 
@@ -146,7 +123,9 @@ async def get_item(
         from streamload.catalog.ingest import _ingest_tv_episodes
 
         ep_count = (await db.execute(
-            select(func.count()).select_from(TvEpisode).where(TvEpisode.tmdb_id == tmdb_id)
+            select(func.count())
+            .select_from(TvEpisode)
+            .where(TvEpisode.tmdb_id == tmdb_id, TvEpisode.media_type == "tv")
         )).scalar_one()
         if ep_count == 0:
             api_key = os.environ.get("TMDB_API_KEY", "")

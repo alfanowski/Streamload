@@ -103,6 +103,7 @@ async def _update_quality_if_needed(sess: object, upstream_text: str) -> None:
             result = await db.execute(
                 select(CatalogSource).where(
                     CatalogSource.tmdb_id == sess.tmdb_id,  # type: ignore[union-attr]
+                    CatalogSource.media_type == sess.media_type,  # type: ignore[union-attr]
                     CatalogSource.service_short_name == sess.service_short_name,  # type: ignore[union-attr]
                     CatalogSource.quality_max_height.is_(None),
                 )

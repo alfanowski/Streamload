@@ -43,7 +43,7 @@ async def _upsert_catalog_item(db: AsyncSession, item: TmdbItem) -> None:
         genres=item.genres,
         metadata_fetched_at=datetime.now(UTC),
     ).on_conflict_do_update(
-        index_elements=["tmdb_id"],
+        index_elements=["tmdb_id", "media_type"],
         set_={
             "title": item.title,
             "original_title": item.original_title,
@@ -91,6 +91,7 @@ async def _resolve_sources_for_item(
         # Upsert catalog_sources row
         stmt = insert(CatalogSource).values(
             tmdb_id=item.tmdb_id,
+            media_type=item.media_type,
             service_short_name=svc.short_name,
             service_url=match.url,
             service_media_id=str(match.id),
@@ -99,7 +100,7 @@ async def _resolve_sources_for_item(
             languages_subs=[],
             last_verified_at=datetime.now(UTC),
         ).on_conflict_do_update(
-            index_elements=["tmdb_id", "service_short_name"],
+            index_elements=["tmdb_id", "media_type", "service_short_name"],
             set_={
                 "service_url": match.url,
                 "service_media_id": str(match.id),
@@ -162,7 +163,8 @@ async def ingest_collection(
     )
     for pos, it in enumerate(items):
         db.add(CollectionItem(
-            collection_id=collection_id, tmdb_id=it.tmdb_id, position=pos,
+            collection_id=collection_id, tmdb_id=it.tmdb_id,
+            media_type=it.media_type, position=pos,
         ))
 
     await db.commit()
@@ -199,6 +201,7 @@ async def _ingest_tv_episodes(
                 still_url = f"https://image.tmdb.org/t/p/w300{ep['still_path']}"
             stmt = insert(TvEpisode).values(
                 tmdb_id=tmdb_id,
+                media_type="tv",
                 season_number=season_number,
                 episode_number=int(ep.get("episode_number", 0)),
                 title=ep.get("name") or None,
@@ -207,7 +210,7 @@ async def _ingest_tv_episodes(
                 runtime_minutes=ep.get("runtime"),
                 still_url=still_url,
             ).on_conflict_do_update(
-                index_elements=["tmdb_id", "season_number", "episode_number"],
+                index_elements=["tmdb_id", "media_type", "season_number", "episode_number"],
                 set_={
                     "title": ep.get("name") or None,
                     "overview": ep.get("overview") or None,

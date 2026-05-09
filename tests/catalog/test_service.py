@@ -36,10 +36,10 @@ async def seeded(db_session):
                    last_refreshed_at=datetime.now(UTC)),
         CatalogItem(tmdb_id=1, media_type="movie", title="A", year=2024),
         CatalogItem(tmdb_id=2, media_type="movie", title="B", year=2024),
-        CatalogSource(tmdb_id=1, service_short_name="sc", service_url="https://sc/1", service_media_id="1"),
-        CatalogSource(tmdb_id=1, service_short_name="rp", service_url="https://rp/1", service_media_id="1"),
-        CollectionItem(collection_id="c1", tmdb_id=1, position=0),
-        CollectionItem(collection_id="c1", tmdb_id=2, position=1),
+        CatalogSource(tmdb_id=1, media_type="movie", service_short_name="sc", service_url="https://sc/1", service_media_id="1"),
+        CatalogSource(tmdb_id=1, media_type="movie", service_short_name="rp", service_url="https://rp/1", service_media_id="1"),
+        CollectionItem(collection_id="c1", tmdb_id=1, media_type="movie", position=0),
+        CollectionItem(collection_id="c1", tmdb_id=2, media_type="movie", position=1),
     ])
     await db_session.commit()
 

@@ -39,4 +39,4 @@ def test_user_id_is_uuid_default():
 
 def test_intro_marker_pk():
     pk = {c.name for c in IntroMarker.__table__.primary_key.columns}
-    assert pk == {"tmdb_id", "season_number"}
+    assert pk == {"tmdb_id", "media_type", "season_number"}

@@ -38,7 +38,7 @@ async def list_episodes(
     """Return all seasons + episodes for a TV title, read from tv_episodes table."""
     rows = (await db.execute(
         select(TvEpisode)
-        .where(TvEpisode.tmdb_id == tmdb_id)
+        .where(TvEpisode.tmdb_id == tmdb_id, TvEpisode.media_type == "tv")
         .order_by(TvEpisode.season_number, TvEpisode.episode_number)
     )).scalars().all()
 

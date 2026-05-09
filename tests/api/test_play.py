@@ -30,7 +30,8 @@ async def test_play_creates_session(api_client: httpx.AsyncClient):
     async for db in gs():
         db.add(CatalogItem(tmdb_id=42, media_type="movie", title="X", year=2024))
         db.add(CatalogSource(
-            tmdb_id=42, service_short_name="sc", service_url="https://sc/42",
+            tmdb_id=42, media_type="movie", service_short_name="sc",
+            service_url="https://sc/42",
             service_media_id="42", quality_max_height=1080,
         ))
         await db.commit()
@@ -83,7 +84,8 @@ async def test_play_blocks_user_with_email_required_unverified(api_client: httpx
     async for db in gs():
         db.add(CatalogItem(tmdb_id=42, media_type="movie", title="X"))
         db.add(CatalogSource(
-            tmdb_id=42, service_short_name="sc", service_url="https://sc/42",
+            tmdb_id=42, media_type="movie", service_short_name="sc",
+            service_url="https://sc/42",
             service_media_id="42",
         ))
         await db.commit()

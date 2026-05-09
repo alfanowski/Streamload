@@ -21,7 +21,8 @@ async def test_get_catalog_item(api_client, authed):
     async for db in gs():
         db.add(CatalogItem(tmdb_id=42, media_type="movie", title="Foo", year=2024))
         db.add(CatalogSource(
-            tmdb_id=42, service_short_name="sc", service_url="https://sc/42",
+            tmdb_id=42, media_type="movie", service_short_name="sc",
+            service_url="https://sc/42",
             service_media_id="42", quality_max_height=1080,
         ))
         await db.commit()

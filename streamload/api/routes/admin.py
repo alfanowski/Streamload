@@ -222,7 +222,11 @@ async def top_watched(
             CatalogItem.poster_url,
             func.count(func.distinct(WatchProgress.user_id)).label("watchers"),
         )
-        .join(WatchProgress, WatchProgress.tmdb_id == CatalogItem.tmdb_id)
+        .join(
+            WatchProgress,
+            (WatchProgress.tmdb_id == CatalogItem.tmdb_id)
+            & (WatchProgress.media_type == CatalogItem.media_type),
+        )
         .group_by(
             CatalogItem.tmdb_id,
             CatalogItem.title,

@@ -8,7 +8,8 @@ from streamload.streaming.sessions import PlaybackSession, PlaybackSessionRegist
 
 def _make(**kw):
     defaults = dict(
-        user_id=uuid.uuid4(), tmdb_id=42, service_short_name="sc",
+        user_id=uuid.uuid4(), tmdb_id=42, media_type="movie",
+        service_short_name="sc",
         upstream_master_url="https://vix/x.m3u8",
         upstream_headers={"Referer": "https://vix"},
         is_drm=False, drm_keys=None,

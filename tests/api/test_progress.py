@@ -22,7 +22,7 @@ async def authed_with_item(api_client: httpx.AsyncClient):
 @pytest.mark.asyncio
 async def test_post_progress_creates_row(api_client, authed_with_item):
     r = await api_client.post("/api/progress", json={
-        "tmdb_id": 42, "position_seconds": 120, "duration_seconds": 7200,
+        "tmdb_id": 42, "media_type": "movie", "position_seconds": 120, "duration_seconds": 7200,
         "source": "sc",
     })
     assert r.status_code == 200
@@ -36,7 +36,7 @@ async def test_post_progress_creates_row(api_client, authed_with_item):
 @pytest.mark.asyncio
 async def test_post_progress_marks_completed_above_90pct(api_client, authed_with_item):
     r = await api_client.post("/api/progress", json={
-        "tmdb_id": 42, "position_seconds": 6500, "duration_seconds": 7200,
+        "tmdb_id": 42, "media_type": "movie", "position_seconds": 6500, "duration_seconds": 7200,
         "source": "sc",
     })
     assert r.status_code == 200
@@ -49,7 +49,7 @@ async def test_post_progress_marks_completed_above_90pct(api_client, authed_with
 @pytest.mark.asyncio
 async def test_get_continue_watching_returns_uncompleted(api_client, authed_with_item):
     await api_client.post("/api/progress", json={
-        "tmdb_id": 42, "position_seconds": 120, "duration_seconds": 7200, "source": "sc",
+        "tmdb_id": 42, "media_type": "movie", "position_seconds": 120, "duration_seconds": 7200, "source": "sc",
     })
     r = await api_client.get("/api/progress/continue-watching")
     body = r.json()

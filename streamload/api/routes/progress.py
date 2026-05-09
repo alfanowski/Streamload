@@ -18,6 +18,7 @@ WATCHED_THRESHOLD = 0.90
 
 class PostProgressRequest(BaseModel):
     tmdb_id: int
+    media_type: str = Field(pattern="^(movie|tv)$")
     season_number: int | None = None
     episode_number: int | None = None
     position_seconds: int = Field(ge=0)
@@ -27,6 +28,7 @@ class PostProgressRequest(BaseModel):
 
 class ProgressItem(BaseModel):
     tmdb_id: int
+    media_type: str
     season_number: int | None
     episode_number: int | None
     position_seconds: int
@@ -45,6 +47,7 @@ async def post_progress(payload: PostProgressRequest, user: CurrentUser, db: Ses
     stmt = insert(WatchProgress).values(
         user_id=user.id,
         tmdb_id=payload.tmdb_id,
+        media_type=payload.media_type,
         season_number=payload.season_number or 0,
         episode_number=payload.episode_number or 0,
         position_seconds=payload.position_seconds,
@@ -53,7 +56,7 @@ async def post_progress(payload: PostProgressRequest, user: CurrentUser, db: Ses
         last_source=payload.source,
         updated_at=datetime.now(UTC),
     ).on_conflict_do_update(
-        index_elements=["user_id", "tmdb_id", "season_number", "episode_number"],
+        index_elements=["user_id", "tmdb_id", "media_type", "season_number", "episode_number"],
         set_={
             "position_seconds": payload.position_seconds,
             "duration_seconds": payload.duration_seconds,
@@ -71,7 +74,11 @@ async def post_progress(payload: PostProgressRequest, user: CurrentUser, db: Ses
 async def continue_watching(user: CurrentUser, db: SessionDep) -> ContinueWatchingResponse:
     stmt = (
         select(WatchProgress, CatalogItem)
-        .join(CatalogItem, CatalogItem.tmdb_id == WatchProgress.tmdb_id)
+        .join(
+            CatalogItem,
+            (CatalogItem.tmdb_id == WatchProgress.tmdb_id)
+            & (CatalogItem.media_type == WatchProgress.media_type),
+        )
         .where(WatchProgress.user_id == user.id)
         .where(WatchProgress.completed.is_(False))
         .order_by(WatchProgress.updated_at.desc())
@@ -81,6 +88,7 @@ async def continue_watching(user: CurrentUser, db: SessionDep) -> ContinueWatchi
     return ContinueWatchingResponse(items=[
         ProgressItem(
             tmdb_id=p.tmdb_id,
+            media_type=p.media_type,
             season_number=p.season_number if p.season_number else None,
             episode_number=p.episode_number if p.episode_number else None,
             position_seconds=p.position_seconds,

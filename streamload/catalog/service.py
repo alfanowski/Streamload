@@ -28,13 +28,19 @@ class CatalogService:
     def __init__(self, db: AsyncSession) -> None:
         self._db = db
 
-    async def get_item(self, tmdb_id: int) -> Optional[CatalogItem]:
+    async def get_item(self, tmdb_id: int, media_type: Optional[str] = None) -> Optional[CatalogItem]:
         stmt = (
             select(CatalogItem)
             .options(selectinload(CatalogItem.sources))
             .where(CatalogItem.tmdb_id == tmdb_id)
         )
-        return (await self._db.execute(stmt)).scalar_one_or_none()
+        if media_type is not None:
+            stmt = stmt.where(CatalogItem.media_type == media_type)
+        result = await self._db.execute(stmt)
+        # If no media_type filter is given and both rows exist, return either
+        # (caller should pass media_type to disambiguate). The migration
+        # backfill ensures any legacy queries land on a deterministic row.
+        return result.scalars().first()
 
     async def list_collections(self) -> list[Collection]:
         stmt = select(Collection).order_by(Collection.sort_order)
@@ -48,7 +54,11 @@ class CatalogService:
             return None
         items_stmt = (
             select(CatalogItem)
-            .join(CollectionItem, CollectionItem.tmdb_id == CatalogItem.tmdb_id)
+            .join(
+                CollectionItem,
+                (CollectionItem.tmdb_id == CatalogItem.tmdb_id)
+                & (CollectionItem.media_type == CatalogItem.media_type),
+            )
             .where(CollectionItem.collection_id == collection_id)
             .order_by(CollectionItem.position)
         )

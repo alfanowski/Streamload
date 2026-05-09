@@ -17,21 +17,17 @@ async def test_full_lifecycle(api_client: httpx.AsyncClient):
         "username": "alice", "email": "alice@x.com", "password": "Hunter2!secret",
     })
     assert r.status_code == 201
-    assert r.json()["role"] == "admin"  # first user
-    assert r.json()["email_verified"] is False
+    # Admin role is no longer auto-granted to the first user; bootstrap handles it.
+    assert r.json()["role"] == "user"
+    # Self-service registration auto-verifies email on a private platform.
+    assert r.json()["email_verified"] is True
 
     # 2. /api/me works (cookie auto-set)
     r = await api_client.get("/api/me")
     assert r.status_code == 200
     assert r.json()["username"] == "alice"
 
-    # 3. Verify email
-    async for db in gs():
-        u = (await db.execute(select(User))).scalar_one()
-        tok = await issue_token(db, user_id=u.id, purpose="verify_email")
-        break
-    r = await api_client.post("/api/auth/verify-email", json={"token": tok})
-    assert r.status_code == 200
+    # 3. Email already verified at registration — no token flow needed.
 
     # 4. Logout
     r = await api_client.post("/api/auth/logout")

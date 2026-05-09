@@ -1,13 +1,25 @@
 import httpx
 import pytest
+import pytest_asyncio
+from sqlalchemy import select
 from unittest.mock import AsyncMock, patch
 
 
-@pytest.fixture
+async def _promote(username: str) -> None:
+    from streamload.db.models import User
+    from streamload.db.session import _session_factory
+    async with _session_factory() as db:
+        u = (await db.execute(select(User).where(User.username == username))).scalar_one()
+        u.role = "admin"
+        await db.commit()
+
+
+@pytest_asyncio.fixture
 async def admin_authed(api_client: httpx.AsyncClient):
     await api_client.post("/api/auth/register", json={
         "username": "admin", "email": "a@x.com", "password": "Hunter2!secret",
     })
+    await _promote("admin")
 
 
 @pytest.mark.asyncio

@@ -29,6 +29,7 @@ async def get_intro(
     row = (await db.execute(
         select(IntroMarker)
         .where(IntroMarker.tmdb_id == tmdb_id)
+        .where(IntroMarker.media_type == "tv")
         .where(IntroMarker.season_number == season)
     )).scalar_one_or_none()
     if row is None:

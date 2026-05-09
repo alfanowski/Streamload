@@ -16,6 +16,7 @@ async def stream_session():
     sess = PlaybackSession.create(
         user_id=uuid.uuid4(),
         tmdb_id=42,
+        media_type="movie",
         service_short_name="sc",
         upstream_master_url="https://up/master.m3u8",
         upstream_headers={"Referer": "https://up"},

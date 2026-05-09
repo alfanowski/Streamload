@@ -41,8 +41,8 @@ async def test_get_collection_items(api_client, authed):
                        last_refreshed_at=datetime.now(UTC)),
             CatalogItem(tmdb_id=1, media_type="movie", title="X", year=2024),
             CatalogItem(tmdb_id=2, media_type="movie", title="Y", year=2024),
-            CollectionItem(collection_id="a", tmdb_id=2, position=0),
-            CollectionItem(collection_id="a", tmdb_id=1, position=1),
+            CollectionItem(collection_id="a", tmdb_id=2, media_type="movie", position=0),
+            CollectionItem(collection_id="a", tmdb_id=1, media_type="movie", position=1),
         ])
         await db.commit()
         break

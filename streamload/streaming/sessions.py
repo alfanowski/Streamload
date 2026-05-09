@@ -18,6 +18,7 @@ class PlaybackSession:
     id: uuid.UUID
     user_id: uuid.UUID
     tmdb_id: int
+    media_type: str  # 'movie' | 'tv'
     service_short_name: str
     upstream_master_url: str
     upstream_headers: dict[str, str]
@@ -28,13 +29,15 @@ class PlaybackSession:
 
     @classmethod
     def create(
-        cls, *, user_id: uuid.UUID, tmdb_id: int, service_short_name: str,
+        cls, *, user_id: uuid.UUID, tmdb_id: int, media_type: str,
+        service_short_name: str,
         upstream_master_url: str, upstream_headers: dict[str, str],
         is_drm: bool = False, drm_keys: Optional[Any] = None,
     ) -> "PlaybackSession":
         now = time.time()
         return cls(
             id=uuid.uuid4(), user_id=user_id, tmdb_id=tmdb_id,
+            media_type=media_type,
             service_short_name=service_short_name,
             upstream_master_url=upstream_master_url,
             upstream_headers=upstream_headers,

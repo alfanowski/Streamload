@@ -47,7 +47,8 @@ async def test_full_proxy_lifecycle(api_client: httpx.AsyncClient):
     async for db in gs():
         db.add(CatalogItem(tmdb_id=99, media_type="movie", title="E2E Movie", year=2025))
         db.add(CatalogSource(
-            tmdb_id=99, service_short_name="sc", service_url="https://sc/99",
+            tmdb_id=99, media_type="movie", service_short_name="sc",
+            service_url="https://sc/99",
             service_media_id="99", quality_max_height=None,
         ))
         await db.commit()

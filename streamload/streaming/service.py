@@ -84,6 +84,7 @@ async def build_playback_session(
     sess = PlaybackSession.create(
         user_id=user_id,
         tmdb_id=tmdb_id,
+        media_type="tv" if is_tv else "movie",
         service_short_name=service.short_name,
         upstream_master_url=bundle.manifest_url,
         upstream_headers=getattr(bundle, "extra_headers", {}) or {},

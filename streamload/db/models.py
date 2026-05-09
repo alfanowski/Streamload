@@ -17,6 +17,7 @@ from sqlalchemy import (
     Date,
     DateTime,
     ForeignKey,
+    ForeignKeyConstraint,
     Integer,
     LargeBinary,
     Numeric,
@@ -173,7 +174,7 @@ class CatalogItem(Base):
     __tablename__ = "catalog_items"
 
     tmdb_id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=False)
-    media_type: Mapped[str] = mapped_column(Text, nullable=False)
+    media_type: Mapped[str] = mapped_column(Text, primary_key=True)
     title: Mapped[str] = mapped_column(Text, nullable=False)
     original_title: Mapped[Optional[str]] = mapped_column(Text)
     year: Mapped[Optional[int]] = mapped_column(Integer, index=True)
@@ -200,9 +201,8 @@ class CatalogItem(Base):
 class CatalogSource(Base):
     __tablename__ = "catalog_sources"
 
-    tmdb_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("catalog_items.tmdb_id", ondelete="CASCADE"), primary_key=True,
-    )
+    tmdb_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    media_type: Mapped[str] = mapped_column(Text, primary_key=True)
     service_short_name: Mapped[str] = mapped_column(Text, primary_key=True, index=True)
     service_url: Mapped[str] = mapped_column(Text, nullable=False)
     service_media_id: Mapped[str] = mapped_column(Text, nullable=False)
@@ -216,6 +216,14 @@ class CatalogSource(Base):
     failure_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0, server_default="0")
 
     item: Mapped[CatalogItem] = relationship(back_populates="sources")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tmdb_id", "media_type"],
+            ["catalog_items.tmdb_id", "catalog_items.media_type"],
+            ondelete="CASCADE",
+        ),
+    )
 
 
 class Collection(Base):
@@ -239,20 +247,26 @@ class CollectionItem(Base):
     collection_id: Mapped[str] = mapped_column(
         Text, ForeignKey("collections.id", ondelete="CASCADE"), primary_key=True,
     )
-    tmdb_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("catalog_items.tmdb_id", ondelete="CASCADE"), primary_key=True,
-    )
+    tmdb_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    media_type: Mapped[str] = mapped_column(Text, primary_key=True)
     position: Mapped[int] = mapped_column(Integer, nullable=False)
 
     collection: Mapped[Collection] = relationship(back_populates="items")
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tmdb_id", "media_type"],
+            ["catalog_items.tmdb_id", "catalog_items.media_type"],
+            ondelete="CASCADE",
+        ),
+    )
 
 
 class TvEpisode(Base):
     __tablename__ = "tv_episodes"
 
-    tmdb_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("catalog_items.tmdb_id", ondelete="CASCADE"), primary_key=True,
-    )
+    tmdb_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    media_type: Mapped[str] = mapped_column(Text, primary_key=True, default="tv", server_default="tv")
     season_number: Mapped[int] = mapped_column(Integer, primary_key=True)
     episode_number: Mapped[int] = mapped_column(Integer, primary_key=True)
     title: Mapped[Optional[str]] = mapped_column(Text)
@@ -261,6 +275,15 @@ class TvEpisode(Base):
     runtime_minutes: Mapped[Optional[int]] = mapped_column(Integer)
     still_url: Mapped[Optional[str]] = mapped_column(Text)
 
+    __table_args__ = (
+        CheckConstraint("media_type = 'tv'", name="ck_tv_episodes_media_type"),
+        ForeignKeyConstraint(
+            ["tmdb_id", "media_type"],
+            ["catalog_items.tmdb_id", "catalog_items.media_type"],
+            ondelete="CASCADE",
+        ),
+    )
+
 
 class WatchProgress(Base):
     __tablename__ = "watch_progress"
@@ -268,9 +291,8 @@ class WatchProgress(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True,
     )
-    tmdb_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("catalog_items.tmdb_id", ondelete="CASCADE"), primary_key=True,
-    )
+    tmdb_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    media_type: Mapped[str] = mapped_column(Text, primary_key=True)
     season_number: Mapped[int] = mapped_column(Integer, primary_key=True, default=0, server_default="0")
     episode_number: Mapped[int] = mapped_column(Integer, primary_key=True, default=0, server_default="0")
     position_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -281,6 +303,14 @@ class WatchProgress(Base):
         DateTime(timezone=True), nullable=False, server_default=func.now(),
     )
 
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tmdb_id", "media_type"],
+            ["catalog_items.tmdb_id", "catalog_items.media_type"],
+            ondelete="CASCADE",
+        ),
+    )
+
 
 class Favorite(Base):
     __tablename__ = "favorites"
@@ -288,11 +318,18 @@ class Favorite(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True,
     )
-    tmdb_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("catalog_items.tmdb_id", ondelete="CASCADE"), primary_key=True,
-    )
+    tmdb_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    media_type: Mapped[str] = mapped_column(Text, primary_key=True)
     added_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tmdb_id", "media_type"],
+            ["catalog_items.tmdb_id", "catalog_items.media_type"],
+            ondelete="CASCADE",
+        ),
     )
 
 
@@ -302,20 +339,26 @@ class Watchlist(Base):
     user_id: Mapped[uuid.UUID] = mapped_column(
         PgUUID(as_uuid=True), ForeignKey("users.id", ondelete="CASCADE"), primary_key=True,
     )
-    tmdb_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("catalog_items.tmdb_id", ondelete="CASCADE"), primary_key=True,
-    )
+    tmdb_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    media_type: Mapped[str] = mapped_column(Text, primary_key=True)
     added_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), nullable=False, server_default=func.now(),
+    )
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ["tmdb_id", "media_type"],
+            ["catalog_items.tmdb_id", "catalog_items.media_type"],
+            ondelete="CASCADE",
+        ),
     )
 
 
 class IntroMarker(Base):
     __tablename__ = "intro_markers"
 
-    tmdb_id: Mapped[int] = mapped_column(
-        Integer, ForeignKey("catalog_items.tmdb_id", ondelete="CASCADE"), primary_key=True,
-    )
+    tmdb_id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    media_type: Mapped[str] = mapped_column(Text, primary_key=True, default="tv", server_default="tv")
     season_number: Mapped[int] = mapped_column(Integer, primary_key=True)
     intro_start_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
     intro_end_seconds: Mapped[int] = mapped_column(Integer, nullable=False)
@@ -327,5 +370,11 @@ class IntroMarker(Base):
         CheckConstraint(
             "detected_by IN ('fingerprint', 'manual')",
             name="ck_intro_markers_detected_by",
+        ),
+        CheckConstraint("media_type = 'tv'", name="ck_intro_markers_media_type"),
+        ForeignKeyConstraint(
+            ["tmdb_id", "media_type"],
+            ["catalog_items.tmdb_id", "catalog_items.media_type"],
+            ondelete="CASCADE",
         ),
     )

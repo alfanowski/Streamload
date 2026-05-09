@@ -27,19 +27,20 @@ async def test_list_watchlist_returns_empty_initially(api_client, authed_with_it
 
 @pytest.mark.asyncio
 async def test_post_watchlist_adds_and_get_returns_it(api_client, authed_with_item):
-    r = await api_client.post("/api/watchlist/77")
+    r = await api_client.post("/api/watchlist/77?media_type=tv")
     assert r.status_code == 201
     r = await api_client.get("/api/watchlist")
     assert r.status_code == 200
     body = r.json()
     assert len(body) == 1
     assert body[0]["tmdb_id"] == 77
+    assert body[0]["media_type"] == "tv"
 
 
 @pytest.mark.asyncio
 async def test_delete_watchlist_removes_it(api_client, authed_with_item):
-    await api_client.post("/api/watchlist/77")
-    r = await api_client.delete("/api/watchlist/77")
+    await api_client.post("/api/watchlist/77?media_type=tv")
+    r = await api_client.delete("/api/watchlist/77?media_type=tv")
     assert r.status_code == 204
     r = await api_client.get("/api/watchlist")
     assert r.json() == []

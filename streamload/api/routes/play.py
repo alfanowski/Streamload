@@ -53,12 +53,13 @@ async def start_playback(
     server: str | None = Query(default=None),
     season: int | None = Query(default=None, ge=1),
     episode: int | None = Query(default=None, ge=1),
+    media_type: str | None = Query(default=None, pattern="^(movie|tv)$"),
 ) -> PlaybackResponse:
     if user.email_verified_at is None and user.email_required:
         raise HTTPException(status.HTTP_403_FORBIDDEN, "email not verified")
 
     svc = CatalogService(db)
-    item = await svc.get_item(tmdb_id)
+    item = await svc.get_item(tmdb_id, media_type=media_type)
     if item is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "title not in catalog")
     if not item.sources:
@@ -121,6 +122,7 @@ async def start_playback(
                 update(CatalogSource)
                 .where(
                     CatalogSource.tmdb_id == tmdb_id,
+                    CatalogSource.media_type == item.media_type,
                     CatalogSource.service_short_name == candidate.metrics.service_short_name,
                 )
                 .values(failure_count=CatalogSource.failure_count + 1)

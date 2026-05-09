@@ -27,19 +27,20 @@ async def test_list_favorites_returns_empty_initially(api_client, authed_with_it
 
 @pytest.mark.asyncio
 async def test_post_favorite_adds_and_get_returns_it(api_client, authed_with_item):
-    r = await api_client.post("/api/favorites/99")
+    r = await api_client.post("/api/favorites/99?media_type=movie")
     assert r.status_code == 201
     r = await api_client.get("/api/favorites")
     assert r.status_code == 200
     body = r.json()
     assert len(body) == 1
     assert body[0]["tmdb_id"] == 99
+    assert body[0]["media_type"] == "movie"
 
 
 @pytest.mark.asyncio
 async def test_delete_favorite_removes_it(api_client, authed_with_item):
-    await api_client.post("/api/favorites/99")
-    r = await api_client.delete("/api/favorites/99")
+    await api_client.post("/api/favorites/99?media_type=movie")
+    r = await api_client.delete("/api/favorites/99?media_type=movie")
     assert r.status_code == 204
     r = await api_client.get("/api/favorites")
     assert r.json() == []
