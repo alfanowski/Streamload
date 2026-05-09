@@ -1,12 +1,18 @@
-"""Catalog detail endpoint."""
+"""Catalog detail endpoint + admin refresh."""
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, status
+import os
+
+import httpx
+from fastapi import APIRouter, BackgroundTasks, HTTPException, status
 from pydantic import BaseModel
 
-from streamload.api.deps import CurrentUser, SessionDep
+from streamload.api.deps import AdminUser, CurrentUser, SessionDep
+from streamload.catalog.collections import get_collection_def
+from streamload.catalog.ingest import ingest_collection
 from streamload.catalog.ranker import SourceMetrics, rank_sources
 from streamload.catalog.service import CatalogService
+from streamload.catalog.tmdb import TmdbClient
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
 
@@ -68,3 +74,38 @@ async def get_item(tmdb_id: int, db: SessionDep, user: CurrentUser) -> CatalogIt
         genres=item.genres,
         sources=[SourceResponse(label=r.label, score=r.score) for r in ranked],
     )
+
+
+async def _refresh_one(collection_id: str, db) -> None:
+    cdef = get_collection_def(collection_id)
+    if cdef is None:
+        return
+    api_key = os.environ.get("TMDB_API_KEY", "")
+    async with httpx.AsyncClient(timeout=15) as http:
+        tmdb = TmdbClient(api_key=api_key, http=http)
+        items = await cdef.fetch(tmdb)
+    from streamload.services import ServiceRegistry, load_services
+    from streamload.utils.http import HttpClient
+    load_services()
+    services = [cls(HttpClient()) for cls in ServiceRegistry.get_all()]
+    await ingest_collection(
+        db, collection_id=cdef.id, collection_title=cdef.title,
+        media_type=cdef.media_type, sort_order=cdef.sort_order,
+        refresh_ttl_hours=cdef.refresh_ttl_hours,
+        items=items, services=services,
+    )
+
+
+admin_router = APIRouter(prefix="/admin", tags=["admin"])
+
+
+@admin_router.post("/catalog/refresh/{collection_id}", status_code=202)
+async def admin_refresh(
+    collection_id: str, db: SessionDep, user: AdminUser,
+    background: BackgroundTasks,
+) -> dict[str, str]:
+    cdef = get_collection_def(collection_id)
+    if cdef is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "unknown collection")
+    background.add_task(_refresh_one, collection_id, db)
+    return {"status": "scheduled", "collection_id": collection_id}
