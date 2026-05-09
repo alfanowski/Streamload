@@ -9,7 +9,7 @@ from fastapi import FastAPI
 
 from streamload.db import init as db_init, shutdown as db_shutdown
 
-from .routes import auth, catalog, collections, email, health, me, passkey
+from .routes import auth, catalog, collections, email, health, me, passkey, search
 
 
 @asynccontextmanager
@@ -44,6 +44,7 @@ def create_app() -> FastAPI:
     app.include_router(health.router, prefix="/api")
     app.include_router(me.router, prefix="/api")
     app.include_router(passkey.router, prefix="/api")
+    app.include_router(search.router, prefix="/api")
     return app
 
 
