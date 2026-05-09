@@ -35,7 +35,6 @@ async def refresh_due_collections(
     db: AsyncSession,
     *,
     tmdb_client: Any,
-    services: list[Any],
     collection_defs: Optional[list[CollectionDef]] = None,
 ) -> list[str]:
     """Refresh collections whose last_refreshed_at is older than their TTL."""
@@ -57,19 +56,10 @@ async def refresh_due_collections(
             db, collection_id=d.id, collection_title=d.title,
             media_type=d.media_type, sort_order=d.sort_order,
             refresh_ttl_hours=d.refresh_ttl_hours,
-            items=items, services=services,
+            items=items,
         )
         refreshed.append(d.id)
     return refreshed
-
-
-def _load_services() -> list[Any]:
-    """Load all v1 service plugins."""
-    from streamload.services import ServiceRegistry, load_services
-    from streamload.utils.http import HttpClient
-    load_services()
-    http = HttpClient()
-    return [cls(http) for cls in ServiceRegistry.get_all()]
 
 
 async def main() -> None:
@@ -80,7 +70,6 @@ async def main() -> None:
     )
     api_key = os.environ.get("TMDB_API_KEY", "")
     db_init(db_url)
-    services = _load_services()
     try:
         while True:
             try:
@@ -89,7 +78,7 @@ async def main() -> None:
                     async with httpx.AsyncClient(timeout=15) as http:
                         tmdb = TmdbClient(api_key=api_key, http=http)
                         refreshed = await refresh_due_collections(
-                            session, tmdb_client=tmdb, services=services,
+                            session, tmdb_client=tmdb,
                         )
                         if refreshed:
                             log.info("Refreshed: %s", ", ".join(refreshed))

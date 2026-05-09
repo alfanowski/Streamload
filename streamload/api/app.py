@@ -100,7 +100,7 @@ async def _run_catalog_refresh_loop() -> None:
     """
     import httpx
     from streamload.catalog.tmdb import TmdbClient
-    from streamload.catalog.worker import POLL_INTERVAL_SECONDS, refresh_due_collections, _load_services
+    from streamload.catalog.worker import POLL_INTERVAL_SECONDS, refresh_due_collections
     from streamload.db.session import _session_factory
 
     api_key = os.environ.get("TMDB_API_KEY", "")
@@ -108,8 +108,6 @@ async def _run_catalog_refresh_loop() -> None:
         log.warning("Catalog refresh disabled: TMDB_API_KEY missing")
         return
 
-    services = _load_services()
-    # Stagger first tick so we don't block readiness probes.
     await asyncio.sleep(5)
 
     while True:
@@ -118,7 +116,7 @@ async def _run_catalog_refresh_loop() -> None:
                 async with httpx.AsyncClient(timeout=20) as http:
                     tmdb = TmdbClient(api_key=api_key, http=http)
                     refreshed = await refresh_due_collections(
-                        db, tmdb_client=tmdb, services=services,
+                        db, tmdb_client=tmdb,
                     )
                     if refreshed:
                         log.info("Catalog refreshed: %s", ", ".join(refreshed))

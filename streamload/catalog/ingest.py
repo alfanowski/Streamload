@@ -1,30 +1,24 @@
-"""Orchestrator: TMDB items -> reverse lookup -> persist catalog state."""
+"""Orchestrator: TMDB items -> persist catalog state."""
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime
-from typing import Any, Optional
+from typing import Optional
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete
 from sqlalchemy.dialects.postgresql import insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from streamload.db.models import (
     CatalogItem,
-    CatalogSource,
     Collection,
     CollectionItem,
     TvEpisode,
 )
 from streamload.utils.logger import get_logger
 
-from .match import best_match
 from .tmdb import TmdbClient, TmdbItem
 
 log = get_logger(__name__)
-
-REVERSE_LOOKUP_CONCURRENCY = 8
-REVERSE_LOOKUP_PER_SERVICE_TIMEOUT_SECONDS = 8.0
 
 
 async def _upsert_catalog_item(db: AsyncSession, item: TmdbItem) -> None:
@@ -61,57 +55,6 @@ async def _upsert_catalog_item(db: AsyncSession, item: TmdbItem) -> None:
     await db.execute(stmt)
 
 
-async def _resolve_sources_for_item(
-    db: AsyncSession,
-    item: TmdbItem,
-    services: list[Any],
-    sem: asyncio.Semaphore,
-) -> int:
-    """Search each service for *item.title*. Persist matched sources. Returns count matched."""
-    matched = 0
-    for svc in services:
-        async with sem:
-            try:
-                results = await asyncio.wait_for(
-                    svc.search_async(item.title),
-                    timeout=REVERSE_LOOKUP_PER_SERVICE_TIMEOUT_SECONDS,
-                )
-            except asyncio.TimeoutError:
-                log.info(
-                    "Service %s timed out (>%ss) for %r — skipping",
-                    svc.short_name, REVERSE_LOOKUP_PER_SERVICE_TIMEOUT_SECONDS, item.title,
-                )
-                continue
-            except Exception:
-                log.warning("Service %s search failed for %r", svc.short_name, item.title, exc_info=True)
-                continue
-        match = best_match(results, target_title=item.title, target_year=item.year)
-        if match is None:
-            continue
-        # Upsert catalog_sources row
-        stmt = insert(CatalogSource).values(
-            tmdb_id=item.tmdb_id,
-            media_type=item.media_type,
-            service_short_name=svc.short_name,
-            service_url=match.url,
-            service_media_id=str(match.id),
-            quality_max_height=None,
-            languages_audio=[],
-            languages_subs=[],
-            last_verified_at=datetime.now(UTC),
-        ).on_conflict_do_update(
-            index_elements=["tmdb_id", "media_type", "service_short_name"],
-            set_={
-                "service_url": match.url,
-                "service_media_id": str(match.id),
-                "last_verified_at": datetime.now(UTC),
-            },
-        )
-        await db.execute(stmt)
-        matched += 1
-    return matched
-
-
 async def ingest_collection(
     db: AsyncSession,
     *,
@@ -121,18 +64,11 @@ async def ingest_collection(
     sort_order: int,
     refresh_ttl_hours: int,
     items: list[TmdbItem],
-    services: list[Any],
 ) -> None:
-    """Full ingest cycle for a collection.
-
-    1. Upsert collection row
-    2. Upsert each catalog_item
-    3. For each item: parallel reverse-lookup on services, persist sources
-    4. Replace collection_items membership with the new ordering
-    """
+    """Full ingest cycle for a collection (TMDB metadata only — v3 has no
+    server-side scraping)."""
     log.info("Ingesting collection %s (%d items)", collection_id, len(items))
 
-    # 1. Collection row
     coll_stmt = insert(Collection).values(
         id=collection_id, title=collection_title, media_type=media_type,
         sort_order=sort_order, refresh_ttl_hours=refresh_ttl_hours,
@@ -147,17 +83,9 @@ async def ingest_collection(
     )
     await db.execute(coll_stmt)
 
-    # 2. Catalog items
     for it in items:
         await _upsert_catalog_item(db, it)
 
-    # 3. Reverse-lookup sources in parallel
-    sem = asyncio.Semaphore(REVERSE_LOOKUP_CONCURRENCY)
-    await asyncio.gather(*[
-        _resolve_sources_for_item(db, it, services, sem) for it in items
-    ])
-
-    # 4. Replace collection_items
     await db.execute(
         delete(CollectionItem).where(CollectionItem.collection_id == collection_id)
     )
@@ -228,15 +156,11 @@ async def ingest_single_title(
     db: AsyncSession,
     *,
     item: TmdbItem,
-    services: list[Any],
-    tmdb: TmdbClient | None = None,
-) -> int:
-    """Ingest one title on-demand: persist metadata + reverse-lookup sources.
+    tmdb: "TmdbClient | None" = None,
+) -> None:
+    """Ingest one title on-demand: TMDB metadata + (for tv) per-season episodes.
 
-    For TV series (and when *tmdb* is supplied) also pulls every season's
-    episode list from TMDB into the tv_episodes table.
-
-    Returns the number of services that produced a match. Caller commits.
+    No reverse-lookup: source resolution lives in the v3 client.
     """
     log.info("Lazy-ingest tmdb_id=%s (%s)", item.tmdb_id, item.title)
     await _upsert_catalog_item(db, item)
@@ -250,9 +174,5 @@ async def ingest_single_title(
         except Exception:
             log.warning("Episode ingestion failed for tmdb=%s", item.tmdb_id, exc_info=True)
 
-    sem = asyncio.Semaphore(REVERSE_LOOKUP_CONCURRENCY)
-    matched = await _resolve_sources_for_item(db, item, services, sem)
     await db.commit()
-    log.info("Lazy-ingest done: tmdb_id=%s matched=%d/%d services",
-             item.tmdb_id, matched, len(services))
-    return matched
+    log.info("Lazy-ingest done: tmdb_id=%s", item.tmdb_id)
