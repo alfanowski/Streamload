@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import uuid
 
-from streamload.db.models import EmailToken, Session, User, WebauthnCredential
+from streamload.db.models import EmailToken, IntroMarker, Session, User, WebauthnCredential
 
 
 def test_user_has_expected_columns():
@@ -35,3 +35,8 @@ def test_webauthn_credential_has_expected_columns():
 def test_user_id_is_uuid_default():
     u = User(username="x", email="x@x")
     assert isinstance(u.id, uuid.UUID) or u.id is None  # default fired only on flush
+
+
+def test_intro_marker_pk():
+    pk = {c.name for c in IntroMarker.__table__.primary_key.columns}
+    assert pk == {"tmdb_id", "season_number"}
