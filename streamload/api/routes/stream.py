@@ -198,15 +198,41 @@ async def proxy_media_audio(session_id: uuid.UUID, lang: str) -> Response:
     return Response(rewritten, media_type="application/x-mpegURL")
 
 
+def _find_rendition_url(master_text: str, rendition: str) -> Optional[str]:
+    """Locate the upstream playlist URL for a given rendition label.
+
+    Handles three cases:
+      - video renditions: `audio="…"` STREAM-INF where the URI is on the
+        following line and contains the rendition label;
+      - audio renditions (label like `audio-ita`): `EXT-X-MEDIA:TYPE=AUDIO`
+        with `LANGUAGE="ita"`, URI in attribute;
+      - subtitle renditions are served by a dedicated endpoint.
+    """
+    if rendition.startswith("audio-"):
+        target_lang = rendition[len("audio-"):]
+        for line in master_text.split("\n"):
+            if (
+                line.startswith("#EXT-X-MEDIA:")
+                and "TYPE=AUDIO" in line
+                and f'LANGUAGE="{target_lang}"' in line
+            ):
+                m = re.search(r'URI="([^"]+)"', line)
+                if m:
+                    return m.group(1)
+        return None
+    # Video rendition — STREAM-INF + next-line URI.
+    lines = master_text.split("\n")
+    for i, line in enumerate(lines):
+        if line.startswith("#EXT-X-STREAM-INF:") and i + 1 < len(lines):
+            url = lines[i + 1].strip()
+            if rendition in url:
+                return url
+    return None
+
+
 @router.get("/{session_id}/key/{rendition}")
 async def proxy_aes_key(session_id: uuid.UUID, rendition: str) -> Response:
-    """Proxy the upstream AES-128 key for HLS clear-key encryption.
-
-    The upstream media playlist contains an `#EXT-X-KEY` whose URI we rewrite
-    to point here. We re-fetch the upstream playlist for the rendition, parse
-    the key URI, resolve it (it's typically relative — `/storage/enc.key`)
-    against the rendition URL, and stream the 16-byte key body back.
-    """
+    """Proxy the upstream AES-128 key for HLS clear-key encryption."""
     from urllib.parse import urljoin
 
     sess = registry.get(session_id, touch=True)
@@ -216,11 +242,7 @@ async def proxy_aes_key(session_id: uuid.UUID, rendition: str) -> Response:
     master_text = await _fetch_upstream_text(
         sess.upstream_master_url, sess.upstream_headers,
     )
-    rendition_url: Optional[str] = None
-    for line in master_text.split("\n"):
-        if not line.startswith("#") and rendition in line and line.strip():
-            rendition_url = line.strip()
-            break
+    rendition_url = _find_rendition_url(master_text, rendition)
     if rendition_url is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"rendition {rendition!r} not found")
 
@@ -235,7 +257,6 @@ async def proxy_aes_key(session_id: uuid.UUID, rendition: str) -> Response:
     if key_uri is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no AES-128 key in playlist")
 
-    # Resolve relative URI against the rendition URL.
     absolute_key_url = urljoin(rendition_url, key_uri)
     http = _get_http()
     r = await http.get(absolute_key_url, headers=sess.upstream_headers)
@@ -253,11 +274,7 @@ async def proxy_segment(session_id: uuid.UUID, rendition: str, n: int) -> Respon
     master_text = await _fetch_upstream_text(
         sess.upstream_master_url, sess.upstream_headers
     )
-    rendition_url: Optional[str] = None
-    for line in master_text.split("\n"):
-        if not line.startswith("#") and rendition in line and line.strip():
-            rendition_url = line.strip()
-            break
+    rendition_url = _find_rendition_url(master_text, rendition)
     if rendition_url is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, f"rendition {rendition!r} not found")
 
