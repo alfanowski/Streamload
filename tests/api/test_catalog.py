@@ -31,7 +31,7 @@ async def test_get_catalog_item(api_client, authed):
     body = r.json()
     assert body["title"] == "Foo"
     assert len(body["sources"]) == 1
-    assert body["sources"][0]["label"] == "Server 1"
+    assert body["sources"][0]["label"] == "StreamingCommunity"
     assert body["sources"][0]["score"] > 0
 
 

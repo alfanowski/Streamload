@@ -156,3 +156,23 @@ async def ingest_collection(
 
     await db.commit()
     log.info("Ingest complete for %s", collection_id)
+
+
+async def ingest_single_title(
+    db: AsyncSession,
+    *,
+    item: TmdbItem,
+    services: list[Any],
+) -> int:
+    """Ingest one title on-demand: persist metadata + reverse-lookup sources.
+
+    Returns the number of services that produced a match. Caller commits.
+    """
+    log.info("Lazy-ingest tmdb_id=%s (%s)", item.tmdb_id, item.title)
+    await _upsert_catalog_item(db, item)
+    sem = asyncio.Semaphore(REVERSE_LOOKUP_CONCURRENCY)
+    matched = await _resolve_sources_for_item(db, item, services, sem)
+    await db.commit()
+    log.info("Lazy-ingest done: tmdb_id=%s matched=%d/%d services",
+             item.tmdb_id, matched, len(services))
+    return matched
