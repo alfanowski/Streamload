@@ -23,8 +23,7 @@ async def db_session():
     engine = create_engine(url)
     factory = create_session_factory(engine)
     async with factory() as s:
-        for tbl in ("collection_items", "catalog_sources", "tv_episodes",
-                    "catalog_items", "collections"):
+        for tbl in ("collection_items", "tv_episodes", "catalog_items", "collections"):
             await s.execute(text(f"TRUNCATE TABLE {tbl} CASCADE"))
         await s.commit()
         yield s
@@ -51,7 +50,7 @@ async def test_refresh_runs_collections_past_ttl(db_session):
         fetch=lambda c: c.trending_day(),
     )
     refreshed = await refresh_due_collections(
-        db_session, tmdb_client=fake_tmdb, services=[],
+        db_session, tmdb_client=fake_tmdb,
         collection_defs=[test_def],
     )
     assert refreshed == ["trending-day"]
@@ -75,7 +74,7 @@ async def test_refresh_skips_recent_collections(db_session):
         fetch=lambda c: c.trending_day(),
     )
     refreshed = await refresh_due_collections(
-        db_session, tmdb_client=fake_tmdb, services=[],
+        db_session, tmdb_client=fake_tmdb,
         collection_defs=[test_def],
     )
     assert refreshed == []

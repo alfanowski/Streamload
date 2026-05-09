@@ -8,7 +8,7 @@ from sqlalchemy import text
 from streamload.catalog.service import CatalogService
 from streamload.db import create_engine, create_session_factory
 from streamload.db.models import (
-    CatalogItem, CatalogSource, Collection, CollectionItem,
+    CatalogItem, Collection, CollectionItem,
 )
 
 
@@ -21,8 +21,7 @@ async def db_session():
     engine = create_engine(url)
     factory = create_session_factory(engine)
     async with factory() as s:
-        for tbl in ("collection_items", "catalog_sources", "tv_episodes",
-                    "catalog_items", "collections"):
+        for tbl in ("collection_items", "tv_episodes", "catalog_items", "collections"):
             await s.execute(text(f"TRUNCATE TABLE {tbl} CASCADE"))
         await s.commit()
         yield s
@@ -36,8 +35,6 @@ async def seeded(db_session):
                    last_refreshed_at=datetime.now(UTC)),
         CatalogItem(tmdb_id=1, media_type="movie", title="A", year=2024),
         CatalogItem(tmdb_id=2, media_type="movie", title="B", year=2024),
-        CatalogSource(tmdb_id=1, media_type="movie", service_short_name="sc", service_url="https://sc/1", service_media_id="1"),
-        CatalogSource(tmdb_id=1, media_type="movie", service_short_name="rp", service_url="https://rp/1", service_media_id="1"),
         CollectionItem(collection_id="c1", tmdb_id=1, media_type="movie", position=0),
         CollectionItem(collection_id="c1", tmdb_id=2, media_type="movie", position=1),
     ])
@@ -45,12 +42,11 @@ async def seeded(db_session):
 
 
 @pytest.mark.asyncio
-async def test_get_item_returns_with_sources(db_session, seeded):
+async def test_get_item_returns_item(db_session, seeded):
     s = CatalogService(db_session)
     item = await s.get_item(1)
     assert item is not None
     assert item.title == "A"
-    assert len(item.sources) == 2
 
 
 @pytest.mark.asyncio

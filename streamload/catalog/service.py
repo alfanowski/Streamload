@@ -6,11 +6,9 @@ from typing import Optional
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from streamload.db.models import (
     CatalogItem,
-    CatalogSource,
     Collection,
     CollectionItem,
 )
@@ -31,7 +29,6 @@ class CatalogService:
     async def get_item(self, tmdb_id: int, media_type: Optional[str] = None) -> Optional[CatalogItem]:
         stmt = (
             select(CatalogItem)
-            .options(selectinload(CatalogItem.sources))
             .where(CatalogItem.tmdb_id == tmdb_id)
         )
         if media_type is not None:

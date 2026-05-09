@@ -18,7 +18,7 @@ async def _truncate_all(factory):
         # Order respects FKs (children first).
         for table in (
             "watch_progress", "favorites", "watchlist",
-            "collection_items", "catalog_sources", "tv_episodes",
+            "collection_items", "tv_episodes",
             "intro_markers",
             "catalog_items", "collections",
             "email_tokens", "webauthn_credentials", "sessions",
