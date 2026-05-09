@@ -64,7 +64,7 @@ def best_match(
     *,
     target_title: str,
     target_year: Optional[int] = None,
-    min_score: int = 80,
+    min_score: int = 88,
 ) -> Optional[T]:
     """Pick the candidate with the highest combined score.
 
@@ -75,6 +75,11 @@ def best_match(
     - more: -30 (still possible to win if title is uniquely strong)
 
     Returns ``None`` when no candidate scores >= ``min_score`` (after penalty).
+
+    Default ``min_score=88`` is tuned so that:
+    - exact title (sim 100) and "X" vs "X Subtitle" (token-set sim 100) pass
+    - single-character or single-token differences ("Movie A" vs "Movie B",
+      both score ~86 via token_set_ratio) are rejected as ambiguous
     """
     best: tuple[Optional[T], int] = (None, -1)
     for c in candidates:
