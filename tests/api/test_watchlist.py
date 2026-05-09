@@ -44,3 +44,36 @@ async def test_delete_watchlist_removes_it(api_client, authed_with_item):
     assert r.status_code == 204
     r = await api_client.get("/api/watchlist")
     assert r.json() == []
+
+
+@pytest.mark.asyncio
+async def test_add_watchlist_emits_event(api_client, authed_with_item):
+    from sqlalchemy import select
+    from streamload.db.models import Event
+
+    await api_client.post("/api/watchlist/77?media_type=tv")
+
+    async for db in gs():
+        rows = (await db.execute(
+            select(Event).where(Event.event_type == "watchlist.add")
+        )).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].payload == {"tmdb_id": 77, "media_type": "tv"}
+        break
+
+
+@pytest.mark.asyncio
+async def test_remove_watchlist_emits_event(api_client, authed_with_item):
+    from sqlalchemy import select
+    from streamload.db.models import Event
+
+    await api_client.post("/api/watchlist/77?media_type=tv")
+    await api_client.delete("/api/watchlist/77?media_type=tv")
+
+    async for db in gs():
+        types = [e.event_type for e in (await db.execute(
+            select(Event)
+        )).scalars().all()]
+        assert "watchlist.add" in types
+        assert "watchlist.remove" in types
+        break

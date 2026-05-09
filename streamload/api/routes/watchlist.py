@@ -1,12 +1,13 @@
 """Watchlist endpoints."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Query, Request
 from pydantic import BaseModel
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
 
 from streamload.api.deps import CurrentUser, SessionDep
+from streamload.api.telemetry import emit as emit_event
 from streamload.db.models import CatalogItem, Watchlist
 
 router = APIRouter(prefix="/watchlist", tags=["watchlist"])
@@ -46,12 +47,15 @@ async def add_to_watchlist(
     tmdb_id: int,
     user: CurrentUser,
     db: SessionDep,
+    request: Request,
     media_type: str = Query(..., pattern="^(movie|tv)$"),
 ) -> dict[str, str]:
     stmt = insert(Watchlist).values(
         user_id=user.id, tmdb_id=tmdb_id, media_type=media_type,
     ).on_conflict_do_nothing()
     await db.execute(stmt)
+    await emit_event(db, request, user_id=user.id, event_type="watchlist.add",
+                     payload={"tmdb_id": tmdb_id, "media_type": media_type})
     await db.commit()
     return {"status": "added"}
 
@@ -61,6 +65,7 @@ async def remove_from_watchlist(
     tmdb_id: int,
     user: CurrentUser,
     db: SessionDep,
+    request: Request,
     media_type: str = Query(..., pattern="^(movie|tv)$"),
 ) -> None:
     await db.execute(
@@ -69,4 +74,6 @@ async def remove_from_watchlist(
         .where(Watchlist.tmdb_id == tmdb_id)
         .where(Watchlist.media_type == media_type)
     )
+    await emit_event(db, request, user_id=user.id, event_type="watchlist.remove",
+                     payload={"tmdb_id": tmdb_id, "media_type": media_type})
     await db.commit()

@@ -44,3 +44,36 @@ async def test_delete_favorite_removes_it(api_client, authed_with_item):
     assert r.status_code == 204
     r = await api_client.get("/api/favorites")
     assert r.json() == []
+
+
+@pytest.mark.asyncio
+async def test_add_favorite_emits_event(api_client, authed_with_item):
+    from sqlalchemy import select
+    from streamload.db.models import Event
+
+    await api_client.post("/api/favorites/99?media_type=movie")
+
+    async for db in gs():
+        rows = (await db.execute(
+            select(Event).where(Event.event_type == "favorite.add")
+        )).scalars().all()
+        assert len(rows) == 1
+        assert rows[0].payload == {"tmdb_id": 99, "media_type": "movie"}
+        break
+
+
+@pytest.mark.asyncio
+async def test_remove_favorite_emits_event(api_client, authed_with_item):
+    from sqlalchemy import select
+    from streamload.db.models import Event
+
+    await api_client.post("/api/favorites/99?media_type=movie")
+    await api_client.delete("/api/favorites/99?media_type=movie")
+
+    async for db in gs():
+        types = [e.event_type for e in (await db.execute(
+            select(Event)
+        )).scalars().all()]
+        assert "favorite.add" in types
+        assert "favorite.remove" in types
+        break
