@@ -9,6 +9,7 @@ download engine completely decoupled from service-specific logic.
 
 from __future__ import annotations
 
+import asyncio
 from abc import ABC, abstractmethod
 from typing import Any
 
@@ -156,6 +157,14 @@ class ServiceBase(ABC):
             :class:`MediaEntry` (for films).
         """
         ...
+
+    async def search_async(self, query: str) -> list[MediaEntry]:
+        """Async wrapper for the sync ``search()`` method.
+
+        Default implementation runs the sync method on a thread. Services
+        can override with a true async implementation when convenient.
+        """
+        return await asyncio.to_thread(self.search, query)
 
     # -- Convenience helpers ------------------------------------------------
 
