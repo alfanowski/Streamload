@@ -5,12 +5,16 @@ from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update
 
 from streamload.api.deps import CurrentUser, SessionDep
 from streamload.catalog.ranker import SourceMetrics, rank_sources
 from streamload.catalog.service import CatalogService
+from streamload.db.models import CatalogSource
 from streamload.streaming.service import build_playback_session
+from streamload.utils.logger import get_logger
+
+log = get_logger(__name__)
 
 router = APIRouter(prefix="/play", tags=["play"])
 
@@ -75,26 +79,60 @@ async def start_playback(
     ]
     ranked = rank_sources(metrics, user_audio_pref="ita", user_subs_pref="ita")
 
-    chosen = ranked[0]
+    # Build the attempt list: explicit user pick first, then everything else by rank.
     if server:
-        for r in ranked:
-            if r.label == server:
-                chosen = r
-                break
+        first = next((r for r in ranked if r.label == server), None)
+        attempts = ([first] + [r for r in ranked if r is not first]) if first else list(ranked)
+    else:
+        attempts = list(ranked)
 
-    service = _get_service(chosen.metrics.service_short_name)
-    sess = await build_playback_session(
-        user_id=user.id,
-        tmdb_id=tmdb_id,
-        service=service,
-        media_id=chosen.metrics.service_media_id,
-        media_url=chosen.metrics.service_url,
-    )
-    return PlaybackResponse(
-        session_id=str(sess.id),
-        master_url=f"/stream/{sess.id}/master.m3u8",
-        current_server=chosen.label,
-        available_servers=[
-            ServerOption(label=r.label, score=r.score) for r in ranked
-        ],
-    )
+    last_error: Exception | None = None
+    for candidate in attempts:
+        service = _get_service(candidate.metrics.service_short_name)
+        try:
+            sess = await build_playback_session(
+                user_id=user.id,
+                tmdb_id=tmdb_id,
+                service=service,
+                media_id=candidate.metrics.service_media_id,
+                media_url=candidate.metrics.service_url,
+            )
+        except Exception as exc:
+            last_error = exc
+            log.warning(
+                "play: source %s failed for tmdb_id=%s: %s",
+                candidate.metrics.service_short_name, tmdb_id, exc,
+            )
+            await db.execute(
+                update(CatalogSource)
+                .where(
+                    CatalogSource.tmdb_id == tmdb_id,
+                    CatalogSource.service_short_name == candidate.metrics.service_short_name,
+                )
+                .values(failure_count=CatalogSource.failure_count + 1)
+            )
+            await db.commit()
+            continue
+
+        # Success — bump the success counter and return.
+        await db.execute(
+            update(CatalogSource)
+            .where(
+                CatalogSource.tmdb_id == tmdb_id,
+                CatalogSource.service_short_name == candidate.metrics.service_short_name,
+            )
+            .values(success_count=CatalogSource.success_count + 1)
+        )
+        await db.commit()
+        return PlaybackResponse(
+            session_id=str(sess.id),
+            master_url=f"/stream/{sess.id}/master.m3u8",
+            current_server=candidate.label,
+            available_servers=[
+                ServerOption(label=r.label, score=r.score) for r in ranked
+            ],
+        )
+
+    # All sources failed.
+    detail = f"all sources failed: {type(last_error).__name__}: {last_error}" if last_error else "no sources"
+    raise HTTPException(status.HTTP_502_BAD_GATEWAY, detail)
