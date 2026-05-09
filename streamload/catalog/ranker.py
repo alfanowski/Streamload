@@ -1,13 +1,37 @@
 """Source ranker.
 
-Combines normalized 0-100 sub-scores into a final score per source. The
-top-ranked source is "Server 1", next "Server 2", etc.
+Combines normalized 0-100 sub-scores into a final score per source. Each
+ranked entry is labelled with a human-friendly service display name (e.g.
+"StreamingCommunity", "AnimeUnity") so the UI can show provenance.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Optional
+
+# Friendly display names per 2-letter service short code.
+SERVICE_DISPLAY_NAMES: dict[str, str] = {
+    "sc": "StreamingCommunity",
+    "au": "AnimeUnity",
+    "aw": "AnimeWorld",
+    "rp": "RaiPlay",
+    "mi": "Mediaset Infinity",
+    "gs": "GuardaSerie",
+    "mg": "MostraGuarda",
+    "dc": "Discovery",
+    "dm": "DMAX",
+    "rt": "RealTime",
+    "tb": "TubiTV",
+    "fn": "Food Network",
+    "nv": "Nove",
+    "cr": "Crunchyroll",
+    "hg": "Home & Garden TV",
+}
+
+
+def display_name(short_name: str) -> str:
+    return SERVICE_DISPLAY_NAMES.get(short_name, short_name.upper())
 
 # Default weights, sum to 1.0.
 DEFAULT_WEIGHTS = {
@@ -107,6 +131,6 @@ def rank_sources(
         ranked.append((score, s))
     ranked.sort(key=lambda t: t[0], reverse=True)
     return [
-        RankedSource(label=f"Server {i+1}", metrics=m, score=round(s, 2))
-        for i, (s, m) in enumerate(ranked)
+        RankedSource(label=display_name(m.service_short_name), metrics=m, score=round(s, 2))
+        for s, m in ranked
     ]

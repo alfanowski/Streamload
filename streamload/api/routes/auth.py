@@ -5,7 +5,7 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
 from pydantic import BaseModel, EmailStr, Field
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from streamload.api.deps import SessionDep
@@ -57,15 +57,13 @@ async def register(
     response: Response,
     request: Request,
 ) -> UserPublic:
-    # Determine role: first user becomes admin.
-    count = (await db.execute(select(func.count(User.id)))).scalar_one()
-    role = "admin" if count == 0 else "user"
-
+    # All self-service registrations create a regular user. The admin role is
+    # provisioned separately at boot via STREAMLOAD_ADMIN_* environment variables.
     user = User(
         username=payload.username,
         email=str(payload.email),
         password_hash=hash_password(payload.password),
-        role=role,
+        role="user",
     )
     db.add(user)
     try:
@@ -123,6 +121,8 @@ async def login(payload: LoginRequest, db: SessionDep, response: Response, reque
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
     if not verify_password(user.password_hash, payload.password):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
+    if user.disabled_at is not None:
+        raise HTTPException(status.HTTP_403_FORBIDDEN, "account disabled")
 
     user.last_login_at = datetime.now(UTC)
     await db.commit()

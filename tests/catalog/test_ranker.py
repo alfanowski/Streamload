@@ -33,10 +33,24 @@ def test_higher_quality_wins_at_equal_other():
 
 
 def test_labels_assigned_in_rank_order():
+    """Labels reflect the actual service display name; ranking is preserved
+    via the order of the returned list (top score first)."""
     sources = [_ms(quality=480), _ms(quality=1080)]
     ranked = rank_sources(sources)
-    assert ranked[0].label == "Server 1"
-    assert ranked[1].label == "Server 2"
+    assert ranked[0].metrics.quality_max_height == 1080
+    assert ranked[1].metrics.quality_max_height == 480
+    # service_short_name "x" has no display mapping, so it falls through to UPPER.
+    assert ranked[0].label == "X"
+    assert ranked[1].label == "X"
+
+
+def test_labels_use_friendly_display_names():
+    from streamload.catalog.ranker import display_name
+    assert display_name("sc") == "StreamingCommunity"
+    assert display_name("au") == "AnimeUnity"
+    assert display_name("rp") == "RaiPlay"
+    # unknown short codes fall back to upper-case.
+    assert display_name("zz") == "ZZ"
 
 
 def test_lower_latency_breaks_quality_tie():

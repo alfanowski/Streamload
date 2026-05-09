@@ -19,12 +19,14 @@ async def test_register_creates_user(api_client: httpx.AsyncClient):
 
 
 @pytest.mark.asyncio
-async def test_first_user_becomes_admin(api_client: httpx.AsyncClient):
+async def test_first_user_is_role_user(api_client: httpx.AsyncClient):
+    """Self-service registration always creates a regular user.
+    The admin is provisioned separately at boot via STREAMLOAD_ADMIN_* env vars."""
     r = await api_client.post("/api/auth/register", json={
         "username": "first", "email": "first@x.com", "password": "Hunter2!secret",
     })
     assert r.status_code == 201
-    assert r.json()["role"] == "admin"
+    assert r.json()["role"] == "user"
 
 
 @pytest.mark.asyncio
