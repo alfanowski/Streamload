@@ -49,7 +49,6 @@ class TopWatchedItem(BaseModel):
 
 class CatalogStats(BaseModel):
     total_items: int
-    total_sources: int
     total_users: int
     active_users: int
     disabled_users: int
@@ -179,10 +178,8 @@ async def delete_user(user_id: str, admin: AdminUser, db: SessionDep) -> dict:
 @router.get("/stats", response_model=CatalogStats)
 async def stats(admin: AdminUser, db: SessionDep) -> CatalogStats:
     from datetime import timedelta
-    from streamload.db.models import CatalogSource
 
     items = (await db.execute(select(func.count(CatalogItem.tmdb_id)))).scalar_one()
-    sources = (await db.execute(select(func.count()).select_from(CatalogSource))).scalar_one()
     total_users = (await db.execute(select(func.count(User.id)))).scalar_one()
     active = (await db.execute(
         select(func.count(User.id)).where(User.disabled_at.is_(None))
@@ -199,7 +196,6 @@ async def stats(admin: AdminUser, db: SessionDep) -> CatalogStats:
 
     return CatalogStats(
         total_items=items,
-        total_sources=sources,
         total_users=total_users,
         active_users=active,
         disabled_users=disabled,
@@ -249,10 +245,3 @@ async def top_watched(
     ]
 
 
-@router.get("/health/domains")
-async def domains_health(admin: AdminUser) -> dict:
-    """Show resolver state per service: cached domain, source, last verified."""
-    from pathlib import Path
-    from streamload.utils.domain_resolver.cache import DomainCache
-    cache = DomainCache(Path("data/domains_cache.json"))
-    return {"entries": cache.entries()}
