@@ -58,3 +58,49 @@ async def test_login_updates_last_login_at(api_client, registered_user):
         u = (await db.execute(select(User))).scalar_one()
         assert u.last_login_at is not None
         break
+
+
+@pytest.mark.asyncio
+async def test_login_success_emits_telemetry_event(api_client: httpx.AsyncClient):
+    from sqlalchemy import select
+    from streamload.db.models import Event
+    from streamload.db import get_session as gs
+
+    await api_client.post("/api/auth/register", json={
+        "username": "tel_user", "email": "tel@x.com", "password": "Hunter2!secret",
+    })
+    await api_client.post("/api/auth/logout")
+    await api_client.post("/api/auth/login", json={
+        "username": "tel_user", "password": "Hunter2!secret",
+    })
+
+    async for db in gs():
+        types = [e.event_type for e in (await db.execute(
+            select(Event).order_by(Event.id)
+        )).scalars().all()]
+        assert "auth.login_success" in types
+        assert "auth.logout" in types
+        break
+
+
+@pytest.mark.asyncio
+async def test_login_failed_emits_telemetry_event(api_client: httpx.AsyncClient):
+    from sqlalchemy import select
+    from streamload.db.models import Event
+    from streamload.db import get_session as gs
+
+    await api_client.post("/api/auth/register", json={
+        "username": "tel_user2", "email": "tel2@x.com", "password": "Hunter2!secret",
+    })
+    await api_client.post("/api/auth/logout")
+    r = await api_client.post("/api/auth/login", json={
+        "username": "tel_user2", "password": "wrong-password",
+    })
+    assert r.status_code == 401
+
+    async for db in gs():
+        types = [e.event_type for e in (await db.execute(
+            select(Event)
+        )).scalars().all()]
+        assert "auth.login_failed" in types
+        break

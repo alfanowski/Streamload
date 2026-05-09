@@ -9,10 +9,12 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from streamload.api.deps import SessionDep
+from streamload.api.telemetry import emit as emit_event
 from streamload.auth.passwords import hash_password, verify_password
 from streamload.auth.rate_limit import RateLimiter
 from streamload.auth.sessions import create_session, delete_session
-from streamload.db.models import User
+from streamload.auth.tokens import hash_token
+from streamload.db.models import Session as SessionModel, User
 from streamload.utils.logger import get_logger
 
 log = get_logger(__name__)
@@ -105,20 +107,30 @@ async def login(payload: LoginRequest, db: SessionDep, response: Response, reque
     stmt = select(User).where((User.username == payload.username) | (User.email == payload.username.lower()))
     user = (await db.execute(stmt)).scalar_one_or_none()
     if user is None or not user.password_hash:
+        await emit_event(db, request, user_id=None, event_type="auth.login_failed",
+                         payload={"reason": "unknown_user"})
+        await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
     if not verify_password(user.password_hash, payload.password):
+        await emit_event(db, request, user_id=user.id, event_type="auth.login_failed",
+                         payload={"reason": "bad_password"})
+        await db.commit()
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "invalid credentials")
     if user.disabled_at is not None:
+        await emit_event(db, request, user_id=user.id, event_type="auth.login_failed",
+                         payload={"reason": "disabled"})
+        await db.commit()
         raise HTTPException(status.HTTP_403_FORBIDDEN, "account disabled")
 
     user.last_login_at = datetime.now(UTC)
-    await db.commit()
 
     token = await create_session(
         db, user_id=user.id,
         user_agent=request.headers.get("user-agent"),
         ip_address=request.client.host if request.client else None,
     )
+    await emit_event(db, request, user_id=user.id, event_type="auth.login_success")
+    await db.commit()
     response.set_cookie(
         "session", token,
         httponly=True, secure=request.url.scheme == "https",
@@ -130,6 +142,16 @@ async def login(payload: LoginRequest, db: SessionDep, response: Response, reque
 @router.post("/logout", status_code=204)
 async def logout(request: Request, response: Response, db: SessionDep) -> None:
     token = request.cookies.get("session")
+    user_id = None
     if token:
+        # Resolve the session to capture user_id before deleting.
+        token_hash = hash_token(token)
+        sess = (await db.execute(
+            select(SessionModel).where(SessionModel.token_hash == token_hash)
+        )).scalar_one_or_none()
+        if sess is not None:
+            user_id = sess.user_id
         await delete_session(db, token=token)
+    await emit_event(db, request, user_id=user_id, event_type="auth.logout")
+    await db.commit()
     response.delete_cookie("session")
