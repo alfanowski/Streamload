@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 
+import httpx
 from fastapi import APIRouter, Query
 from pydantic import BaseModel
 
@@ -25,10 +26,8 @@ class SearchResponse(BaseModel):
     results: list[SearchResult]
 
 
-def _build_tmdb_client() -> TmdbClient:
+def _build_tmdb_client(http: httpx.AsyncClient) -> TmdbClient:
     api_key = os.environ.get("TMDB_API_KEY", "")
-    import httpx
-    http = httpx.AsyncClient(timeout=15)
     return TmdbClient(api_key=api_key, http=http)
 
 
@@ -37,8 +36,9 @@ async def search(
     user: CurrentUser,
     q: str = Query(min_length=1, max_length=100),
 ) -> SearchResponse:
-    client = _build_tmdb_client()
-    items = await client.search_multi(q)
+    async with httpx.AsyncClient(timeout=15) as http:
+        client = _build_tmdb_client(http)
+        items = await client.search_multi(q)
     return SearchResponse(
         query=q,
         results=[
