@@ -1,0 +1,11 @@
+:80 {
+    handle /api/* {
+        reverse_proxy streamload-api:8000
+    }
+    handle /stream/* {
+        reverse_proxy streamload-api:8000
+    }
+    handle {
+        reverse_proxy streamload-web:80
+    }
+}
