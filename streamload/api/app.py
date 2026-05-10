@@ -11,7 +11,7 @@ from fastapi import FastAPI
 from streamload.db import init as db_init, shutdown as db_shutdown
 from streamload.utils.logger import get_logger
 
-from .routes import admin, auth, catalog, collections, email, episodes, events, favorites, health, intro, library, me, next_up, passkey, progress, search, settings, watchlist
+from .routes import admin, auth, auth_github, catalog, collections, email, episodes, events, favorites, health, intro, library, me, next_up, passkey, progress, search, settings, watchlist
 
 log = get_logger(__name__)
 
@@ -139,6 +139,7 @@ def create_app() -> FastAPI:
         openapi_url="/api/openapi.json",
     )
     app.include_router(auth.router, prefix="/api")
+    app.include_router(auth_github.router, prefix="/api")
     app.include_router(catalog.router, prefix="/api")
     app.include_router(collections.router, prefix="/api")
     app.include_router(email.router, prefix="/api")
