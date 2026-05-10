@@ -13,21 +13,15 @@ if str(ROOT) not in sys.path:
 
 from sqlalchemy import text  # noqa: E402
 
+import streamload.db.session as _db_session  # noqa: E402
+
 from streamload.db import init as db_init, shutdown as db_shutdown  # noqa: E402
-from streamload.db.session import _session_factory  # noqa: E402
 
 
-async def main() -> None:
-    if os.environ.get("STREAMLOAD_ENV") == "production":
-        print("refusing to truncate users in production")
-        sys.exit(1)
-    db_url = os.environ.get(
-        "DATABASE_URL",
-        "postgresql+asyncpg://streamload:streamload@127.0.0.1:5432/streamload",
-    )
+async def main(db_url: str) -> None:
     db_init(db_url)
     try:
-        async with _session_factory() as db:
+        async with _db_session._session_factory() as db:  # type: ignore[misc]
             # CASCADE drops sessions, webauthn_credentials, watch_progress,
             # favorites, watchlist, etc.
             await db.execute(text("TRUNCATE users CASCADE"))
@@ -38,4 +32,11 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    if os.environ.get("STREAMLOAD_ENV") == "production":
+        print("refusing to truncate users in production")
+        sys.exit(1)
+    _db_url = os.environ.get(
+        "DATABASE_URL",
+        "postgresql+asyncpg://streamload:streamload@127.0.0.1:5432/streamload",
+    )
+    asyncio.run(main(_db_url))
