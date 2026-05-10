@@ -31,6 +31,29 @@ async def test_list_collections(api_client, authed):
     assert r.status_code == 200
     body = r.json()
     assert [c["id"] for c in body] == ["a", "b"]
+    # The list endpoint inlines items so the home page can render in one round-trip.
+    assert all("items" in c for c in body)
+
+
+@pytest.mark.asyncio
+async def test_list_collections_inlines_items(api_client, authed):
+    async for db in gs():
+        db.add_all([
+            Collection(id="a", title="A", sort_order=10, refresh_ttl_hours=24,
+                       last_refreshed_at=datetime.now(UTC)),
+            CatalogItem(tmdb_id=1, media_type="movie", title="X", year=2024),
+            CatalogItem(tmdb_id=2, media_type="movie", title="Y", year=2024),
+            CollectionItem(collection_id="a", tmdb_id=2, media_type="movie", position=0),
+            CollectionItem(collection_id="a", tmdb_id=1, media_type="movie", position=1),
+        ])
+        await db.commit()
+        break
+    r = await api_client.get("/api/collections")
+    assert r.status_code == 200
+    body = r.json()
+    [a] = body
+    assert [i["tmdb_id"] for i in a["items"]] == [2, 1]
+    assert a["items"][0]["title"] == "Y"
 
 
 @pytest.mark.asyncio
