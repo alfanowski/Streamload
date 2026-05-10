@@ -40,6 +40,30 @@ async def test_patch_profile_marks_profile_complete(api_client, authed_github):
 
 
 @pytest.mark.asyncio
+async def test_get_me_includes_profile_fields_after_completion(
+    api_client, authed_github,
+):
+    """Regression: GET /api/me must return profile_complete + the new
+    GitHub/profile fields. If it doesn't, the client's bootstrap reads
+    profile_complete=null → false → infinite redirect to /onboarding/profile."""
+    await api_client.patch("/api/me/profile", json={
+        "first_name": "Andrea",
+        "last_name": "Alfano",
+        "birth_date": "1990-01-15",
+        "gender": "male",
+    })
+    r = await api_client.get("/api/me")
+    assert r.status_code == 200
+    body = r.json()
+    assert body["profile_complete"] is True
+    assert body["first_name"] == "Andrea"
+    assert body["last_name"] == "Alfano"
+    assert body["birth_date"] == "1990-01-15"
+    assert body["gender"] == "male"
+    assert body["github_username"] == "seven"
+
+
+@pytest.mark.asyncio
 async def test_patch_profile_rejects_unknown_gender(api_client, authed_github):
     r = await api_client.patch("/api/me/profile", json={
         "first_name": "X", "last_name": "Y",

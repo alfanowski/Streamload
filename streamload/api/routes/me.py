@@ -13,28 +13,11 @@ from streamload.db.models import Gender
 router = APIRouter(tags=["users"])
 
 
-class UserResponse(BaseModel):
-    id: str
-    username: str
-    email: str
-    email_verified: bool
-    role: str
-    locale: str
-
-    class Config:
-        from_attributes = True
-
-
-@router.get("/me", response_model=UserResponse)
-async def me(user: CurrentUser) -> UserResponse:
-    return UserResponse(
-        id=str(user.id),
-        username=user.username,
-        email=user.email,
-        email_verified=user.email_verified_at is not None,
-        role=user.role,
-        locale=user.locale,
-    )
+@router.get("/me", response_model=UserPublic)
+async def me(user: CurrentUser) -> UserPublic:
+    """Returns the full UserPublic — including profile_complete + GitHub fields,
+    so the client's bootstrap can route to /home vs /onboarding/profile correctly."""
+    return _user_to_public(user)
 
 
 class ProfilePatchRequest(BaseModel):
