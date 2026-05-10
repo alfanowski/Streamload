@@ -1,6 +1,7 @@
 """Auth endpoints: register, login, logout."""
 from __future__ import annotations
 
+import datetime as dt
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
@@ -37,6 +38,12 @@ class UserPublic(BaseModel):
     email: str
     email_verified: bool
     role: str
+    github_username: str | None = None
+    first_name: str | None = None
+    last_name: str | None = None
+    birth_date: dt.date | None = None
+    gender: str | None = None
+    profile_complete: bool = False
 
 
 def _user_to_public(u: User) -> UserPublic:
@@ -46,6 +53,12 @@ def _user_to_public(u: User) -> UserPublic:
         email=u.email,
         email_verified=u.email_verified_at is not None,
         role=u.role,
+        github_username=u.github_username,
+        first_name=u.first_name,
+        last_name=u.last_name,
+        birth_date=u.birth_date,
+        gender=u.gender.value if u.gender else None,
+        profile_complete=u.profile_complete,
     )
 
 

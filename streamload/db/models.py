@@ -5,6 +5,8 @@ Migrations are managed by Alembic; these models are the source of truth.
 """
 from __future__ import annotations
 
+import datetime as dt
+import enum
 import uuid
 from datetime import datetime
 from typing import Optional
@@ -16,6 +18,7 @@ from sqlalchemy import (
     CheckConstraint,
     Date,
     DateTime,
+    Enum as SQLEnum,
     ForeignKey,
     ForeignKeyConstraint,
     Integer,
@@ -30,6 +33,13 @@ from sqlalchemy.dialects.postgresql import INET, JSONB, UUID as PgUUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from .base import Base
+
+
+class Gender(str, enum.Enum):
+    male = "male"
+    female = "female"
+    non_binary = "non_binary"
+    prefer_not_to_say = "prefer_not_to_say"
 
 
 class User(Base):
@@ -65,6 +75,13 @@ class User(Base):
     disabled_at: Mapped[Optional[datetime]] = mapped_column(
         DateTime(timezone=True), nullable=True,
     )
+    github_id: Mapped[Optional[int]] = mapped_column(BigInteger, unique=True, nullable=True)
+    github_username: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    first_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    last_name: Mapped[Optional[str]] = mapped_column(String(64), nullable=True)
+    birth_date: Mapped[Optional[dt.date]] = mapped_column(Date, nullable=True)
+    gender: Mapped[Optional[Gender]] = mapped_column(SQLEnum(Gender, name="gender"), nullable=True)
+    profile_complete: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False, server_default="false")
 
     sessions: Mapped[list["Session"]] = relationship(
         back_populates="user", cascade="all, delete-orphan",
