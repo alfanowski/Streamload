@@ -4,7 +4,14 @@ from __future__ import annotations
 import asyncio
 import os
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import AsyncIterator
+
+# Load .env from the repo root BEFORE any module reads os.environ.
+# Without this, granian/pytest/etc. don't pick up TMDB_API_KEY, RESEND_API_KEY,
+# or any other config the app expects at boot.
+from dotenv import load_dotenv as _load_dotenv
+_load_dotenv(Path(__file__).resolve().parents[2] / ".env")
 
 from fastapi import FastAPI
 
