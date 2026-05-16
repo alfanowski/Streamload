@@ -99,3 +99,92 @@ async def test_image_url_returns_none_for_none():
     http = MagicMock()
     client = TmdbClient(api_key="x", http=http)
     assert client.image_url(None) is None
+
+
+@pytest.mark.asyncio
+async def test_trending_day_with_media_type_filter():
+    """``media_type=movie`` should hit ``/trending/movie/day`` rather than
+    ``/trending/all/day``, and parse the rows as movies by default (TMDB does
+    not include ``media_type`` in filtered responses)."""
+    http = MagicMock()
+    http.get = AsyncMock(return_value=_mk_resp({
+        "results": [
+            {"id": 1, "title": "M", "release_date": "2025-01-01", "poster_path": "/p.jpg"},
+        ]
+    }))
+    client = TmdbClient(api_key="x", http=http)
+    items = await client.trending_day(media_type="movie")
+    assert items[0].media_type == "movie"
+    called_url = http.get.call_args[0][0]
+    assert "/trending/movie/day" in called_url
+
+
+@pytest.mark.asyncio
+async def test_discover_by_genre_movie_with_language():
+    http = MagicMock()
+    http.get = AsyncMock(return_value=_mk_resp({
+        "results": [
+            {"id": 1, "title": "C", "release_date": "2024-01-01", "poster_path": "/p.jpg"},
+        ]
+    }))
+    client = TmdbClient(api_key="x", http=http)
+    items = await client.discover_by_genre(
+        genre_ids=[35], media_type="movie", original_language="it",
+    )
+    assert len(items) == 1
+    called_params = http.get.call_args.kwargs.get("params", {})
+    assert called_params.get("with_genres") == "35"
+    assert called_params.get("with_original_language") == "it"
+
+
+@pytest.mark.asyncio
+async def test_new_releases_movie_uses_release_date_window():
+    http = MagicMock()
+    http.get = AsyncMock(return_value=_mk_resp({
+        "results": [
+            {"id": 1, "title": "N", "release_date": "2025-04-01", "poster_path": "/p.jpg"},
+        ]
+    }))
+    client = TmdbClient(api_key="x", http=http)
+    items = await client.new_releases(media_type="movie", days=30)
+    assert len(items) == 1
+    called_params = http.get.call_args.kwargs.get("params", {})
+    assert called_params.get("sort_by") == "primary_release_date.desc"
+    assert "primary_release_date.gte" in called_params
+
+
+@pytest.mark.asyncio
+async def test_new_releases_tv_uses_first_air_date_window():
+    http = MagicMock()
+    http.get = AsyncMock(return_value=_mk_resp({"results": []}))
+    client = TmdbClient(api_key="x", http=http)
+    await client.new_releases(media_type="tv", days=60)
+    called_params = http.get.call_args.kwargs.get("params", {})
+    assert called_params.get("sort_by") == "first_air_date.desc"
+    assert "first_air_date.gte" in called_params
+
+
+@pytest.mark.asyncio
+async def test_similar_and_recommendations_validate_media_type():
+    http = MagicMock()
+    client = TmdbClient(api_key="x", http=http)
+    with pytest.raises(ValueError):
+        await client.similar(1, media_type="weird")
+    with pytest.raises(ValueError):
+        await client.recommendations(1, media_type="weird")
+
+
+@pytest.mark.asyncio
+async def test_top_rated_tv_endpoint():
+    http = MagicMock()
+    http.get = AsyncMock(return_value=_mk_resp({
+        "results": [
+            {"id": 1, "name": "Show", "first_air_date": "2010-01-01",
+             "poster_path": "/p.jpg"},
+        ]
+    }))
+    client = TmdbClient(api_key="x", http=http)
+    items = await client.top_rated_tv()
+    assert items[0].media_type == "tv"
+    called_url = http.get.call_args[0][0]
+    assert called_url.endswith("/tv/top_rated")

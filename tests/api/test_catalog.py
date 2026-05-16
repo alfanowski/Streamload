@@ -77,3 +77,214 @@ async def test_get_videos_bad_media_type_400(api_client, authed):
 async def test_get_videos_requires_auth(api_client):
     r = await api_client.get("/api/catalog/1396/videos?media_type=movie")
     assert r.status_code == 401
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Home rows (sub-plan 8 / Phase D1) — TMDB-proxy endpoints fed to the
+# client's PosterRow / BackdropRow components. Each test stubs the
+# corresponding TmdbClient method and asserts the shape that the client's
+# MediaSummary expects (tmdb_id / media_type / title / year / poster_url /
+# backdrop_url). We also exercise validation (bad media_type / missing key).
+# ──────────────────────────────────────────────────────────────────────────
+
+
+def _summary_item(**overrides):
+    """Build a synthetic TmdbItem with sensible defaults for row tests."""
+    from streamload.catalog.tmdb import TmdbItem
+
+    base = dict(
+        tmdb_id=1,
+        media_type="movie",
+        title="Foo",
+        year=2025,
+        poster_url="https://i/p.jpg",
+        backdrop_url="https://i/b.jpg",
+    )
+    base.update(overrides)
+    return TmdbItem(**base)
+
+
+@pytest.mark.asyncio
+async def test_rows_trending_week_default(api_client, authed, monkeypatch):
+    from unittest.mock import AsyncMock
+
+    monkeypatch.setenv("TMDB_API_KEY", "test-key")
+
+    async def fake_week(self, *, media_type="all", page=1):
+        return [
+            _summary_item(tmdb_id=10, title="A"),
+            _summary_item(tmdb_id=11, media_type="tv", title="B", year=2024),
+        ]
+
+    monkeypatch.setattr(
+        "streamload.api.routes.catalog.TmdbClient.trending_week", fake_week,
+    )
+    r = await api_client.get("/api/catalog/rows/trending")
+    assert r.status_code == 200
+    body = r.json()
+    assert [b["tmdb_id"] for b in body] == [10, 11]
+    assert body[0]["title"] == "A"
+    assert body[0]["poster_url"] == "https://i/p.jpg"
+    assert body[1]["media_type"] == "tv"
+
+
+@pytest.mark.asyncio
+async def test_rows_trending_day(api_client, authed, monkeypatch):
+    monkeypatch.setenv("TMDB_API_KEY", "test-key")
+
+    async def fake_day(self, *, media_type="all", page=1):
+        # Echo media_type back so we can assert the route forwarded it.
+        return [_summary_item(tmdb_id=1, media_type=media_type, title=f"mt={media_type}")]
+
+    monkeypatch.setattr(
+        "streamload.api.routes.catalog.TmdbClient.trending_day", fake_day,
+    )
+    r = await api_client.get("/api/catalog/rows/trending?period=day&media_type=movie")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body) == 1
+    assert body[0]["title"] == "mt=movie"
+
+
+@pytest.mark.asyncio
+async def test_rows_trending_invalid_period(api_client, authed, monkeypatch):
+    monkeypatch.setenv("TMDB_API_KEY", "test-key")
+    r = await api_client.get("/api/catalog/rows/trending?period=hour")
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_rows_trending_503_when_no_tmdb_key(api_client, authed, monkeypatch):
+    monkeypatch.delenv("TMDB_API_KEY", raising=False)
+    r = await api_client.get("/api/catalog/rows/trending")
+    assert r.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_rows_new_releases_movie(api_client, authed, monkeypatch):
+    monkeypatch.setenv("TMDB_API_KEY", "test-key")
+
+    async def fake_new(self, *, media_type, days=60, page=1):
+        return [_summary_item(tmdb_id=100, media_type=media_type, title=f"new-{media_type}")]
+
+    monkeypatch.setattr(
+        "streamload.api.routes.catalog.TmdbClient.new_releases", fake_new,
+    )
+    r = await api_client.get("/api/catalog/rows/new-releases?media_type=movie")
+    assert r.status_code == 200
+    body = r.json()
+    assert body[0]["title"] == "new-movie"
+
+
+@pytest.mark.asyncio
+async def test_rows_new_releases_bad_media_type(api_client, authed, monkeypatch):
+    monkeypatch.setenv("TMDB_API_KEY", "test-key")
+    r = await api_client.get("/api/catalog/rows/new-releases?media_type=bogus")
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_rows_by_genre(api_client, authed, monkeypatch):
+    monkeypatch.setenv("TMDB_API_KEY", "test-key")
+
+    captured: dict = {}
+
+    async def fake_disc(self, *, genre_ids, media_type, original_language=None, page=1):
+        captured["ids"] = genre_ids
+        captured["media_type"] = media_type
+        captured["lang"] = original_language
+        return [_summary_item(tmdb_id=g, title=f"g{g}") for g in genre_ids]
+
+    monkeypatch.setattr(
+        "streamload.api.routes.catalog.TmdbClient.discover_by_genre", fake_disc,
+    )
+    r = await api_client.get(
+        "/api/catalog/rows/by-genre?genre_ids=80,53&media_type=movie&original_language=it",
+    )
+    assert r.status_code == 200
+    body = r.json()
+    assert [b["title"] for b in body] == ["g80", "g53"]
+    assert captured["ids"] == [80, 53]
+    assert captured["media_type"] == "movie"
+    assert captured["lang"] == "it"
+
+
+@pytest.mark.asyncio
+async def test_rows_by_genre_missing_ids(api_client, authed, monkeypatch):
+    monkeypatch.setenv("TMDB_API_KEY", "test-key")
+    r = await api_client.get(
+        "/api/catalog/rows/by-genre?genre_ids=&media_type=movie",
+    )
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_rows_top_rated_tv(api_client, authed, monkeypatch):
+    monkeypatch.setenv("TMDB_API_KEY", "test-key")
+
+    async def fake_top(self, *, page=1):
+        return [_summary_item(tmdb_id=7, media_type="tv", title="GOAT")]
+
+    monkeypatch.setattr(
+        "streamload.api.routes.catalog.TmdbClient.top_rated_tv", fake_top,
+    )
+    r = await api_client.get("/api/catalog/rows/top-rated?media_type=tv")
+    assert r.status_code == 200
+    body = r.json()
+    assert body[0]["title"] == "GOAT"
+    assert body[0]["media_type"] == "tv"
+
+
+@pytest.mark.asyncio
+async def test_rows_similar_endpoint(api_client, authed, monkeypatch):
+    monkeypatch.setenv("TMDB_API_KEY", "test-key")
+
+    async def fake_similar(self, tmdb_id, *, media_type, page=1):
+        return [_summary_item(tmdb_id=tmdb_id + 1, media_type=media_type, title="like")]
+
+    monkeypatch.setattr(
+        "streamload.api.routes.catalog.TmdbClient.similar", fake_similar,
+    )
+    r = await api_client.get("/api/catalog/1396/similar?media_type=tv")
+    assert r.status_code == 200
+    body = r.json()
+    assert body[0]["tmdb_id"] == 1397
+    assert body[0]["media_type"] == "tv"
+
+
+@pytest.mark.asyncio
+async def test_rows_recommendations_endpoint(api_client, authed, monkeypatch):
+    monkeypatch.setenv("TMDB_API_KEY", "test-key")
+
+    async def fake_recs(self, tmdb_id, *, media_type, page=1):
+        return [_summary_item(tmdb_id=42, media_type=media_type, title="rec")]
+
+    monkeypatch.setattr(
+        "streamload.api.routes.catalog.TmdbClient.recommendations", fake_recs,
+    )
+    r = await api_client.get("/api/catalog/1396/recommendations?media_type=movie")
+    assert r.status_code == 200
+    body = r.json()
+    assert body[0]["title"] == "rec"
+
+
+@pytest.mark.asyncio
+async def test_rows_caps_at_20(api_client, authed, monkeypatch):
+    """Each row endpoint should cap at 20 items even when TMDB returns more."""
+    monkeypatch.setenv("TMDB_API_KEY", "test-key")
+
+    async def fake_week(self, *, media_type="all", page=1):
+        return [_summary_item(tmdb_id=i, title=f"t{i}") for i in range(50)]
+
+    monkeypatch.setattr(
+        "streamload.api.routes.catalog.TmdbClient.trending_week", fake_week,
+    )
+    r = await api_client.get("/api/catalog/rows/trending")
+    assert r.status_code == 200
+    assert len(r.json()) == 20
+
+
+@pytest.mark.asyncio
+async def test_rows_require_auth(api_client):
+    r = await api_client.get("/api/catalog/rows/trending")
+    assert r.status_code == 401

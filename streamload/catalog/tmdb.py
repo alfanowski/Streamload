@@ -119,13 +119,26 @@ class TmdbClient:
         data = await self._get("/movie/top_rated", {"page": page})
         return [self._parse_movie(x) for x in data.get("results", [])]
 
-    async def trending_day(self, *, page: int = 1) -> list[TmdbItem]:
-        data = await self._get("/trending/all/day", {"page": page})
-        return [self._parse_search_or_collection_item(x) for x in data.get("results", [])]
+    async def top_rated_tv(self, *, page: int = 1) -> list[TmdbItem]:
+        data = await self._get("/tv/top_rated", {"page": page})
+        return [self._parse_tv(x) for x in data.get("results", [])]
 
-    async def trending_week(self, *, page: int = 1) -> list[TmdbItem]:
-        data = await self._get("/trending/all/week", {"page": page})
-        return [self._parse_search_or_collection_item(x) for x in data.get("results", [])]
+    async def trending_day(self, *, media_type: str = "all", page: int = 1) -> list[TmdbItem]:
+        """``media_type`` is one of ``all``/``movie``/``tv``."""
+        data = await self._get(f"/trending/{media_type}/day", {"page": page})
+        default = "tv" if media_type == "tv" else "movie"
+        return [
+            self._parse_search_or_collection_item(x, default_type=default)
+            for x in data.get("results", [])
+        ]
+
+    async def trending_week(self, *, media_type: str = "all", page: int = 1) -> list[TmdbItem]:
+        data = await self._get(f"/trending/{media_type}/week", {"page": page})
+        default = "tv" if media_type == "tv" else "movie"
+        return [
+            self._parse_search_or_collection_item(x, default_type=default)
+            for x in data.get("results", [])
+        ]
 
     async def discover_movies_by_genre(self, *, genre_ids: list[int], page: int = 1) -> list[TmdbItem]:
         data = await self._get("/discover/movie", {
@@ -134,6 +147,84 @@ class TmdbClient:
             "page": page,
         })
         return [self._parse_movie(x) for x in data.get("results", [])]
+
+    async def discover_by_genre(
+        self,
+        *,
+        genre_ids: list[int],
+        media_type: str,
+        original_language: str | None = None,
+        page: int = 1,
+    ) -> list[TmdbItem]:
+        """Discover ``movie`` or ``tv`` items filtered by genre IDs.
+
+        Optional ``original_language`` lets Home rows like "Commedie italiane"
+        constrain results to a specific language (``it``).
+        """
+        if media_type not in ("movie", "tv"):
+            raise ValueError("media_type must be 'movie' or 'tv'")
+        params: dict[str, Any] = {
+            "with_genres": ",".join(str(g) for g in genre_ids),
+            "sort_by": "popularity.desc",
+            "page": page,
+        }
+        if original_language:
+            params["with_original_language"] = original_language
+        data = await self._get(f"/discover/{media_type}", params)
+        parser = self._parse_movie if media_type == "movie" else self._parse_tv
+        return [parser(x) for x in data.get("results", [])]
+
+    async def new_releases(
+        self,
+        *,
+        media_type: str,
+        days: int = 60,
+        page: int = 1,
+    ) -> list[TmdbItem]:
+        """Recent releases sorted by date — the last ``days`` days.
+
+        Movies use ``primary_release_date``; TV uses ``first_air_date``. The
+        TMDB API requires the ``.gte`` / ``.lte`` window to narrow "new" to a
+        believable window — without it we get every movie ever made sorted by
+        release date, which means a bunch of 1900s shorts at the top.
+        """
+        if media_type not in ("movie", "tv"):
+            raise ValueError("media_type must be 'movie' or 'tv'")
+        from datetime import UTC, datetime, timedelta
+
+        today = datetime.now(UTC).date()
+        floor = today - timedelta(days=days)
+        if media_type == "movie":
+            params: dict[str, Any] = {
+                "sort_by": "primary_release_date.desc",
+                "primary_release_date.gte": floor.isoformat(),
+                "primary_release_date.lte": today.isoformat(),
+                "page": page,
+            }
+        else:
+            params = {
+                "sort_by": "first_air_date.desc",
+                "first_air_date.gte": floor.isoformat(),
+                "first_air_date.lte": today.isoformat(),
+                "page": page,
+            }
+        data = await self._get(f"/discover/{media_type}", params)
+        parser = self._parse_movie if media_type == "movie" else self._parse_tv
+        return [parser(x) for x in data.get("results", [])]
+
+    async def similar(self, tmdb_id: int, *, media_type: str, page: int = 1) -> list[TmdbItem]:
+        if media_type not in ("movie", "tv"):
+            raise ValueError("media_type must be 'movie' or 'tv'")
+        data = await self._get(f"/{media_type}/{tmdb_id}/similar", {"page": page})
+        parser = self._parse_movie if media_type == "movie" else self._parse_tv
+        return [parser(x) for x in data.get("results", [])]
+
+    async def recommendations(self, tmdb_id: int, *, media_type: str, page: int = 1) -> list[TmdbItem]:
+        if media_type not in ("movie", "tv"):
+            raise ValueError("media_type must be 'movie' or 'tv'")
+        data = await self._get(f"/{media_type}/{tmdb_id}/recommendations", {"page": page})
+        parser = self._parse_movie if media_type == "movie" else self._parse_tv
+        return [parser(x) for x in data.get("results", [])]
 
     async def discover_anime(self, *, page: int = 1) -> list[TmdbItem]:
         # Anime: TV with genre 16 (Animation) + origin country JP.
