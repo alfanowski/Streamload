@@ -62,6 +62,54 @@ async def _fetch_tmdb_item(
     return None
 
 
+class VideoResponse(BaseModel):
+    """Subset of TMDB ``/videos`` results — only fields the client uses."""
+    key: str          # YouTube video id
+    site: str         # always "YouTube" (filtered)
+    type: str         # "Trailer" / "Teaser" / "Clip" / ...
+    official: bool
+    name: str | None = None
+
+
+@router.get("/{tmdb_id}/videos", response_model=list[VideoResponse])
+async def get_item_videos(
+    tmdb_id: int,
+    user: CurrentUser,
+    media_type: str,
+) -> list[VideoResponse]:
+    """Proxy TMDB ``/{movie|tv}/{id}/videos``, returning YouTube items only.
+
+    The client's HeroTrailer feeds the first matching key into a YouTube
+    IFrame Player. We keep TMDB credentials server-side; the client never
+    sees the API key.
+    """
+    if media_type not in ("movie", "tv"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "media_type must be 'movie' or 'tv'")
+    api_key = os.environ.get("TMDB_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "TMDB not configured")
+    async with httpx.AsyncClient(timeout=15) as http:
+        tmdb = TmdbClient(api_key=api_key, http=http)
+        try:
+            results = await tmdb.get_videos(tmdb_id, media_type=media_type)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return []
+            log.warning("TMDB videos %s/%s error: %s", media_type, tmdb_id, e)
+            return []
+    return [
+        VideoResponse(
+            key=str(v.get("key") or ""),
+            site=str(v.get("site") or ""),
+            type=str(v.get("type") or ""),
+            official=bool(v.get("official", False)),
+            name=v.get("name"),
+        )
+        for v in results
+        if v.get("site") == "YouTube" and v.get("key")
+    ]
+
+
 @router.get("/{tmdb_id}", response_model=CatalogItemResponse)
 async def get_item(
     tmdb_id: int,

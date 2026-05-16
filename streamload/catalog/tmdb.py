@@ -157,6 +157,19 @@ class TmdbClient:
         """Raw season payload — caller picks the fields it cares about."""
         return await self._get(f"/tv/{tmdb_id}/season/{season_number}")
 
+    async def get_videos(self, tmdb_id: int, *, media_type: str) -> list[dict]:
+        """Raw videos payload (``results`` array) for movie or tv.
+
+        We do NOT localise this call — many titles only have an English
+        trailer registered, and asking TMDB for ``it-IT`` returns an empty
+        list. Callers can filter by ``site`` / ``type`` / ``official``.
+        """
+        data = await self._get(
+            f"/{media_type}/{tmdb_id}/videos",
+            {"language": "en-US"},
+        )
+        return list(data.get("results", []))
+
     async def search_multi(self, query: str, *, page: int = 1) -> list[TmdbItem]:
         data = await self._get("/search/multi", {"query": query, "page": page})
         results = []
