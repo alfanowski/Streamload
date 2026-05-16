@@ -43,25 +43,29 @@ async def search(
     db: SessionDep,
     request: Request,
     q: str = Query(min_length=1, max_length=100),
+    page: int = Query(default=1, ge=1, le=5),
 ) -> SearchResponse:
     qh = hashlib.sha256(q.encode("utf-8")).hexdigest()
 
-    # Bookkeeping FIRST so it lands even if TMDB call fails.
-    db.add(SearchHistory(user_id=user.id, query_text=q, query_hash=qh))
+    # Bookkeeping FIRST so it lands even if TMDB call fails. We only log
+    # the first page to avoid double-counting an infinite-scroll session.
+    if page == 1:
+        db.add(SearchHistory(user_id=user.id, query_text=q, query_hash=qh))
     result_count = 0
     items = []
     try:
         async with httpx.AsyncClient(timeout=15) as http:
             client = _build_tmdb_client(http)
-            items = await client.search_multi(q)
+            items = await client.search_multi(q, page=page)
         result_count = len(items)
     except Exception:
         items = []
-        log.warning("TMDB search failed for %r", q, exc_info=True)
+        log.warning("TMDB search failed for %r (page=%d)", q, page, exc_info=True)
     finally:
-        await emit_event(db, request, user_id=user.id, event_type="search.run",
-                         payload={"query_hash": qh, "result_count": result_count})
-        await db.commit()
+        if page == 1:
+            await emit_event(db, request, user_id=user.id, event_type="search.run",
+                             payload={"query_hash": qh, "result_count": result_count})
+            await db.commit()
 
     return SearchResponse(
         query=q,
