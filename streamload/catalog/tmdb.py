@@ -261,6 +261,15 @@ class TmdbClient:
         )
         return list(data.get("results", []))
 
+    async def get_credits(self, tmdb_id: int, *, media_type: str) -> dict:
+        """Raw credits payload (``cast`` + ``crew`` arrays) for movie or tv.
+
+        Localised to the client's default (``it-IT``) so character names
+        come back in Italian when TMDB has them. Callers are expected to
+        cap ``cast`` and filter ``crew`` to the jobs they care about.
+        """
+        return await self._get(f"/{media_type}/{tmdb_id}/credits")
+
     async def search_multi(self, query: str, *, page: int = 1) -> list[TmdbItem]:
         data = await self._get("/search/multi", {"query": query, "page": page})
         results = []

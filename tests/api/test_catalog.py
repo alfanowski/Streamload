@@ -80,6 +80,90 @@ async def test_get_videos_requires_auth(api_client):
 
 
 # ──────────────────────────────────────────────────────────────────────────
+# Credits endpoint (sub-plan 8 / Phase E2). Backend caps cast at 10 (by
+# `order`) and filters crew to {Creator, Director, Showrunner, Producer,
+# Writer}. Tests stub TmdbClient.get_credits with a synthetic payload.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_credits_caps_cast_and_filters_crew(api_client, authed, monkeypatch):
+    monkeypatch.setenv("TMDB_API_KEY", "test-key")
+
+    async def fake_credits(self, tmdb_id, *, media_type):
+        return {
+            "cast": [
+                # 12 cast entries — endpoint should cap at 10 and sort by order
+                {"id": i, "name": f"Actor {i}", "character": f"Char {i}",
+                 "order": i, "profile_path": f"/p{i}.jpg"}
+                for i in range(12)
+            ],
+            "crew": [
+                {"id": 100, "name": "A Director", "job": "Director",
+                 "profile_path": "/d.jpg"},
+                {"id": 101, "name": "B Writer", "job": "Writer", "profile_path": None},
+                {"id": 102, "name": "C Editor", "job": "Editor"},        # skipped
+                {"id": 103, "name": "D Creator", "job": "Creator"},
+                {"id": 100, "name": "A Director", "job": "Director"},    # dedup
+                {"id": 104, "name": "E Producer", "job": "Producer"},
+            ],
+        }
+
+    monkeypatch.setattr(
+        "streamload.api.routes.catalog.TmdbClient.get_credits",
+        fake_credits,
+    )
+    r = await api_client.get("/api/catalog/1396/credits?media_type=tv")
+    assert r.status_code == 200
+    body = r.json()
+    assert len(body["cast"]) == 10
+    assert body["cast"][0]["name"] == "Actor 0"
+    assert body["cast"][0]["character"] == "Char 0"
+    # Profile URL is a full TMDB image URL.
+    assert body["cast"][0]["profile_url"].startswith("https://image.tmdb.org/t/p/w185")
+
+    crew_jobs = [c["job"] for c in body["crew"]]
+    assert "Editor" not in crew_jobs
+    assert "Director" in crew_jobs
+    assert "Creator" in crew_jobs
+    assert "Producer" in crew_jobs
+    # Dedup: A Director only appears once.
+    assert crew_jobs.count("Director") == 1
+
+
+@pytest.mark.asyncio
+async def test_get_credits_bad_media_type_400(api_client, authed):
+    r = await api_client.get("/api/catalog/1396/credits?media_type=bogus")
+    assert r.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_get_credits_requires_auth(api_client):
+    r = await api_client.get("/api/catalog/1396/credits?media_type=movie")
+    assert r.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_get_credits_404_returns_empty(api_client, authed, monkeypatch):
+    monkeypatch.setenv("TMDB_API_KEY", "test-key")
+
+    async def fake_credits(self, tmdb_id, *, media_type):
+        raise httpx.HTTPStatusError(
+            "not found",
+            request=httpx.Request("GET", "/"),
+            response=httpx.Response(404),
+        )
+
+    monkeypatch.setattr(
+        "streamload.api.routes.catalog.TmdbClient.get_credits",
+        fake_credits,
+    )
+    r = await api_client.get("/api/catalog/1/credits?media_type=movie")
+    assert r.status_code == 200
+    assert r.json() == {"cast": [], "crew": []}
+
+
+# ──────────────────────────────────────────────────────────────────────────
 # Home rows (sub-plan 8 / Phase D1) — TMDB-proxy endpoints fed to the
 # client's PosterRow / BackdropRow components. Each test stubs the
 # corresponding TmdbClient method and asserts the shape that the client's

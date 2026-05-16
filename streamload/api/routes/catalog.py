@@ -71,6 +71,97 @@ class VideoResponse(BaseModel):
     name: str | None = None
 
 
+class CreditPersonResponse(BaseModel):
+    """Subset of TMDB credit-person fields used by the title page sidebar."""
+    id: int
+    name: str
+    character: str | None = None  # cast only
+    job: str | None = None        # crew only
+    profile_url: str | None = None
+    order: int | None = None      # cast ordering (lower = bigger role)
+
+
+class CreditsResponse(BaseModel):
+    cast: list[CreditPersonResponse]
+    crew: list[CreditPersonResponse]
+
+
+# Crew jobs we surface in the "CREATO DA" block. Anything else gets
+# dropped so the title page sidebar stays terse and signal-rich. Keep
+# this list small — adding 20 producers per title flips the section into
+# a wall of names that nobody will read.
+_CREW_JOBS = {"Creator", "Director", "Showrunner", "Producer", "Writer"}
+
+
+@router.get("/{tmdb_id}/credits", response_model=CreditsResponse)
+async def get_item_credits(
+    tmdb_id: int,
+    user: CurrentUser,
+    media_type: str,
+) -> CreditsResponse:
+    """Proxy TMDB ``/{movie|tv}/{id}/credits`` for the title page sidebar.
+
+    Caps cast at 10 (by TMDB's ``order`` field — main cast first), and
+    filters crew to a curated job allow-list so the sidebar stays terse.
+    """
+    if media_type not in ("movie", "tv"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "media_type must be 'movie' or 'tv'")
+    api_key = os.environ.get("TMDB_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "TMDB not configured")
+    async with httpx.AsyncClient(timeout=15) as http:
+        tmdb = TmdbClient(api_key=api_key, http=http)
+        try:
+            data = await tmdb.get_credits(tmdb_id, media_type=media_type)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return CreditsResponse(cast=[], crew=[])
+            log.warning("TMDB credits %s/%s error: %s", media_type, tmdb_id, e)
+            return CreditsResponse(cast=[], crew=[])
+
+        raw_cast = list(data.get("cast", []))
+        # TMDB returns cast sorted by `order` ascending (main cast first),
+        # but the field is occasionally missing — fall back to insertion
+        # order in that case.
+        raw_cast.sort(key=lambda p: p.get("order") if p.get("order") is not None else 9999)
+        cast = [
+            CreditPersonResponse(
+                id=int(p.get("id") or 0),
+                name=str(p.get("name") or ""),
+                character=p.get("character"),
+                profile_url=tmdb.image_url(p.get("profile_path"), size="w185"),
+                order=p.get("order"),
+            )
+            for p in raw_cast[:10]
+            if p.get("name")
+        ]
+
+        raw_crew = list(data.get("crew", []))
+        seen_ids: set[tuple[int, str]] = set()
+        crew: list[CreditPersonResponse] = []
+        for p in raw_crew:
+            job = str(p.get("job") or "")
+            if job not in _CREW_JOBS:
+                continue
+            person_id = int(p.get("id") or 0)
+            key = (person_id, job)
+            if key in seen_ids:
+                continue
+            seen_ids.add(key)
+            crew.append(
+                CreditPersonResponse(
+                    id=person_id,
+                    name=str(p.get("name") or ""),
+                    job=job,
+                    profile_url=tmdb.image_url(p.get("profile_path"), size="w185"),
+                )
+            )
+            # Hard cap to keep the sidebar visually tight.
+            if len(crew) >= 6:
+                break
+    return CreditsResponse(cast=cast, crew=crew)
+
+
 @router.get("/{tmdb_id}/videos", response_model=list[VideoResponse])
 async def get_item_videos(
     tmdb_id: int,
