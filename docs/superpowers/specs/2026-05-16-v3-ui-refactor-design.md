@@ -270,7 +270,6 @@ Two-font system. Inter for everything readable, mono for "metadata as data" — 
 
 - Personalized recommendations ("Perché hai guardato X") — needs a rec engine, not worth it for ~10 users
 - Multi-profile (Netflix-style profile picker) — single profile per account is fine
-- Mobile/touch UX adaptations — desktop only for v1
 - Live-channel browsing — out of scope (we're VOD)
 - Downloads — out of scope (streaming only)
 - Light theme — dark only for v1
@@ -279,6 +278,91 @@ Two-font system. Inter for everything readable, mono for "metadata as data" — 
 - Per-row "Vedi tutti" full pages — chip filters in Home cover most needs
 - Search filters by genre/year/rating — chip filters by type only for v1
 - Reordering rows, "more like this" rabbit holes — defer
+
+## Mobile / responsive design
+
+Flutter ships iOS + Android out of the box; the same widgets render on phone, but the layouts and interactions need to adapt. Three breakpoints drive everything:
+
+```dart
+class Breakpoints {
+  static const phone   = 600;   // < 600 px → phone (portrait + landscape)
+  static const tablet  = 900;   // 600..899 → tablet
+  // >= 900 → desktop
+}
+```
+
+`Responsive` helper widget exposes `isPhone(context)`, `isTablet(context)`, `isDesktop(context)` via `MediaQuery.sizeOf(context).width`.
+
+### Per-surface adaptations
+
+**Navigation**
+- **Desktop / tablet:** top bar as specified (logo + 5 tabs + search + avatar). Bar collapses at 900-1100 by dropping spacing.
+- **Phone:** top bar shrinks to logo + 🔍 + avatar only. Categories move to a **bottom tab bar**: Home · Cerca · La mia lista · Profilo. Film / Serie TV / Anime become **filter chips** under the hero on Home (style C from the earlier nav screen, applied only to phone). Settings + logout live behind the Profilo tab on phone (no avatar popover — full-page profile screen).
+
+**Hero**
+- **Desktop:** ~480px tall, metadata at bottom-left in a single horizontal block.
+- **Tablet:** ~360px tall, same layout but compressed.
+- **Phone:** **65% of viewport height**, full-width. Metadata stacked vertically (title → meta line → 2-line synopsis → CTAs). CTAs become full-width on phones < 380px wide. Trailer behavior identical (WebView works on iOS / Android via webview_flutter).
+- Indicator dots: smaller on phone. Hover-to-pause replaced by **tap-anywhere-to-pause** + tap again to resume.
+
+**Rows**
+- **Desktop:** poster cards 160w / backdrop cards 320w. ~6 visible per viewport.
+- **Tablet:** poster 130 / backdrop 260. ~5 visible.
+- **Phone:** poster 110 / backdrop 220. ~2-3 visible. Snap-scrolling enabled (`PageScrollPhysics` with `ClampingScrollPhysics` fallback) so cards center neatly after a fling.
+- "Vedi tutti" link in the row header navigates to a `/list/<rowKey>` grid page — same as desktop but more useful on phone since rows are narrower.
+
+**Card interaction**
+- **Desktop:** hover scale + popup with chevron-down.
+- **Mobile (phone + tablet):** no hover effects. Tap → navigate to title page. Long-press → context menu (`Aggiungi a Lista` / `Condividi`).
+
+**Title page**
+- **Desktop:** 2-column body (synopsis 2/3 | cast sidebar 1/3).
+- **Tablet:** still 2-column but narrower sidebar.
+- **Phone:** **single column stacked**. Order: hero → CTAs → synopsis → "Mostra dettagli" expandable that reveals Cast / Created by / Genres → Episodi (full-width list, each row has thumb 80×45 + title + duration + chevron) → "Titoli simili" horizontal row. Episodes list uses `ListView.separated` (not a horizontal scroll like rows).
+
+**Watch page**
+- **Desktop:** floating glass controls at bottom.
+- **Phone (portrait):** video on top in 16:9, with the **title + episode info + Continua a guardare** stack below. Tap on the video toggles fullscreen.
+- **Phone (landscape) / fullscreen:** edge-to-edge video, controls overlay on tap. Bigger touch targets (44pt min per Apple HIG). Audio / subtitle popups become **bottom sheets** instead of dropdown menus. Add a `←` close button top-left (currently desktop has it; mobile gets it too).
+- **Gestures (phone only):** double-tap left → -10s, double-tap right → +10s. Vertical drag on right half → volume; on left half → brightness (only if running in fullscreen / immersive). Horizontal drag → scrub.
+
+**Search**
+- **Desktop:** 🔍 in top bar opens overlay.
+- **Phone:** 🔍 tab in bottom bar navigates to `/search`. The "overlay" is the page itself — input at top, suggestions inline as you type, full grid below when query is committed. Skip the modal/blur step (modals on phone feel cramped).
+
+### Per-input adaptations
+
+- Touch targets ≥ 44pt on phone (Apple HIG).
+- All hover states have a tap-equivalent.
+- `Cmd+K` shortcut for search → desktop only; no equivalent on phone (always one tap away in bottom nav).
+- Pull-to-refresh on Home + Search results pages on phone (`RefreshIndicator`).
+- Swipe-back gesture on title / watch pages (iOS-style edge-swipe to pop).
+
+### Implementation footprint
+
+Mobile is **not** a separate codebase — same widgets, conditional layouts:
+
+```dart
+LayoutBuilder(builder: (ctx, c) {
+  final width = c.maxWidth;
+  if (width < Breakpoints.phone) return _HomeMobile();
+  if (width < Breakpoints.tablet) return _HomeTablet();
+  return _HomeDesktop();
+});
+```
+
+Most widgets get a single layout that parametrizes on `Responsive.isPhone(ctx)`. Only Home, Title, Watch have meaningfully different mobile structures (separate sub-widgets).
+
+### iOS / Android specifics
+
+- **iOS:** keep the SF-feel typography. Add `cupertino_icons` package (already a Flutter standard). Status bar adapts to dark theme. App icon + launch screen need updating (kept as v2 stubs for now).
+- **Android:** edge-to-edge with system UI behind transparent app bars. Material 3 ripples on cards (already default in Flutter).
+- **Both:** background audio when player is in foreground — not in scope for v1 (defer to a future audio session sub-plan).
+
+### Testing on mobile
+
+- Use Flutter Inspector + the responsive preview (Cmd+Alt+R in VS Code) to test all breakpoints from the desktop dev machine.
+- For real-device testing: deploy to a physical iPhone via Xcode (operator has macOS + Xcode), and an Android emulator if needed. Mobile final QA is a manual sweep at the end of each phase, not a per-task gate.
 
 ## Implementation phasing (informs writing-plans)
 
@@ -302,3 +386,5 @@ Two-font system. Inter for everything readable, mono for "metadata as data" — 
   Restyle plugin_onboarding_page to new tokens, no logic changes.
 
 Each phase is independently shippable and testable. Phases A-B are foundation. Phases C-E are the user-visible "wow". Phase F is the "Al momento non disponibile" polish. Phases G-I are cleanup.
+
+**Mobile is cross-cutting.** Every phase ships with phone + tablet + desktop layouts in one go (the `Responsive` helper + `LayoutBuilder` pattern in § Mobile / responsive design). No separate mobile phase — that would double the work and let the two surfaces drift. Real-device manual QA at the end of each phase.
