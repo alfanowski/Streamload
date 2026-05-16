@@ -205,12 +205,53 @@ async def get_item_videos(
 # Home "rows" — thin TMDB proxies returning MediaSummary-shaped JSON.
 # Used by the client's PosterRow / BackdropRow components. Each row endpoint
 # is independent so a slow / failing row doesn't block the whole page.
-# Hard cap each response at 20 items; the client never paginates a row.
+#
+# Caller picks the row length via the ``limit`` query param (default 40,
+# capped at 100 — TMDB returns 20 per page, so >20 means we fetch multiple
+# pages and concat). The ``page`` param lets a future "Vedi tutti" grid
+# paginate beyond the first slice.
 # ──────────────────────────────────────────────────────────────────────────
 
-# Hardcoded cap to keep responses cheap and consistent — rows are visual
-# strips, never paginated. Bump only if a design genuinely needs more.
-_ROW_LIMIT = 20
+# Default row length — bumped from 20 → 40 per operator (May 16): home
+# rows felt repetitive, more horizontal content per row helps.
+_ROW_DEFAULT_LIMIT = 40
+# Hard ceiling so a buggy / malicious caller can't force us to fan out
+# 50 TMDB requests per row.
+_ROW_MAX_LIMIT = 100
+# TMDB page size — every TMDB list endpoint returns at most 20 items per
+# page. We use this constant to derive how many pages to fetch when a
+# caller asks for more than 20 items in one row.
+_TMDB_PAGE_SIZE = 20
+
+
+def _normalize_limit(limit: int) -> int:
+    if limit < 1:
+        return 1
+    if limit > _ROW_MAX_LIMIT:
+        return _ROW_MAX_LIMIT
+    return limit
+
+
+async def _collect_pages(
+    fetch_page,  # async (page: int) -> list[TmdbItem]
+    *,
+    limit: int,
+    start_page: int,
+) -> list[TmdbItem]:
+    """Fetch enough TMDB pages to satisfy ``limit`` items, starting from
+    ``start_page``. Stops early when a page returns fewer than
+    ``_TMDB_PAGE_SIZE`` items (= we've hit the end of the result set)."""
+    out: list[TmdbItem] = []
+    page = start_page
+    while len(out) < limit:
+        chunk = await fetch_page(page)
+        if not chunk:
+            break
+        out.extend(chunk)
+        if len(chunk) < _TMDB_PAGE_SIZE:
+            break
+        page += 1
+    return out[:limit]
 
 
 class MediaSummaryResponse(BaseModel):
@@ -261,30 +302,52 @@ async def rows_trending(
     user: CurrentUser,
     period: str = "week",
     media_type: str = "all",
+    limit: int = _ROW_DEFAULT_LIMIT,
+    page: int = 1,
 ) -> list[MediaSummaryResponse]:
-    """``period`` is ``day`` or ``week``; ``media_type`` is ``all``/``movie``/``tv``."""
+    """``period`` is ``day`` or ``week``; ``media_type`` is ``all``/``movie``/``tv``.
+
+    ``limit`` and ``page`` let the client request longer rows or paginate
+    beyond the first slice. Default 40 items, hard-capped at 100.
+    """
     if period not in ("day", "week"):
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "period must be 'day' or 'week'")
     _validate_media_type(media_type, allow_all=True)
+    limit = _normalize_limit(limit)
+    if page < 1:
+        page = 1
     api_key = _require_tmdb_key()
     async with httpx.AsyncClient(timeout=15) as http:
         tmdb = TmdbClient(api_key=api_key, http=http)
         fn = tmdb.trending_day if period == "day" else tmdb.trending_week
-        items = await fn(media_type=media_type)
-    return [_to_summary(i) for i in items[:_ROW_LIMIT]]
+        items = await _collect_pages(
+            lambda p: fn(media_type=media_type, page=p),
+            limit=limit,
+            start_page=page,
+        )
+    return [_to_summary(i) for i in items]
 
 
 @router.get("/rows/new-releases", response_model=list[MediaSummaryResponse])
 async def rows_new_releases(
     user: CurrentUser,
     media_type: str,
+    limit: int = _ROW_DEFAULT_LIMIT,
+    page: int = 1,
 ) -> list[MediaSummaryResponse]:
     _validate_media_type(media_type)
+    limit = _normalize_limit(limit)
+    if page < 1:
+        page = 1
     api_key = _require_tmdb_key()
     async with httpx.AsyncClient(timeout=15) as http:
         tmdb = TmdbClient(api_key=api_key, http=http)
-        items = await tmdb.new_releases(media_type=media_type)
-    return [_to_summary(i) for i in items[:_ROW_LIMIT]]
+        items = await _collect_pages(
+            lambda p: tmdb.new_releases(media_type=media_type, page=p),
+            limit=limit,
+            start_page=page,
+        )
+    return [_to_summary(i) for i in items]
 
 
 @router.get("/rows/by-genre", response_model=list[MediaSummaryResponse])
@@ -293,6 +356,8 @@ async def rows_by_genre(
     genre_ids: str,
     media_type: str,
     original_language: str | None = None,
+    limit: int = _ROW_DEFAULT_LIMIT,
+    page: int = 1,
 ) -> list[MediaSummaryResponse]:
     """``genre_ids`` is a comma-separated list of TMDB genre IDs (e.g. ``80,53``)."""
     _validate_media_type(media_type)
@@ -305,31 +370,46 @@ async def rows_by_genre(
         )
     if not ids:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "genre_ids required")
+    limit = _normalize_limit(limit)
+    if page < 1:
+        page = 1
     api_key = _require_tmdb_key()
     async with httpx.AsyncClient(timeout=15) as http:
         tmdb = TmdbClient(api_key=api_key, http=http)
-        items = await tmdb.discover_by_genre(
-            genre_ids=ids,
-            media_type=media_type,
-            original_language=original_language,
+        items = await _collect_pages(
+            lambda p: tmdb.discover_by_genre(
+                genre_ids=ids,
+                media_type=media_type,
+                original_language=original_language,
+                page=p,
+            ),
+            limit=limit,
+            start_page=page,
         )
-    return [_to_summary(i) for i in items[:_ROW_LIMIT]]
+    return [_to_summary(i) for i in items]
 
 
 @router.get("/rows/top-rated", response_model=list[MediaSummaryResponse])
 async def rows_top_rated(
     user: CurrentUser,
     media_type: str,
+    limit: int = _ROW_DEFAULT_LIMIT,
+    page: int = 1,
 ) -> list[MediaSummaryResponse]:
     _validate_media_type(media_type)
+    limit = _normalize_limit(limit)
+    if page < 1:
+        page = 1
     api_key = _require_tmdb_key()
     async with httpx.AsyncClient(timeout=15) as http:
         tmdb = TmdbClient(api_key=api_key, http=http)
-        if media_type == "movie":
-            items = await tmdb.top_rated_movies()
-        else:
-            items = await tmdb.top_rated_tv()
-    return [_to_summary(i) for i in items[:_ROW_LIMIT]]
+        fn = tmdb.top_rated_movies if media_type == "movie" else tmdb.top_rated_tv
+        items = await _collect_pages(
+            lambda p: fn(page=p),
+            limit=limit,
+            start_page=page,
+        )
+    return [_to_summary(i) for i in items]
 
 
 @router.get("/{tmdb_id}/similar", response_model=list[MediaSummaryResponse])
@@ -337,8 +417,10 @@ async def get_item_similar(
     tmdb_id: int,
     user: CurrentUser,
     media_type: str,
+    limit: int = _ROW_DEFAULT_LIMIT,
 ) -> list[MediaSummaryResponse]:
     _validate_media_type(media_type)
+    limit = _normalize_limit(limit)
     api_key = _require_tmdb_key()
     async with httpx.AsyncClient(timeout=15) as http:
         tmdb = TmdbClient(api_key=api_key, http=http)
@@ -349,7 +431,7 @@ async def get_item_similar(
                 return []
             log.warning("TMDB similar %s/%s error: %s", media_type, tmdb_id, e)
             return []
-    return [_to_summary(i) for i in items[:_ROW_LIMIT]]
+    return [_to_summary(i) for i in items[:limit]]
 
 
 @router.get("/{tmdb_id}/recommendations", response_model=list[MediaSummaryResponse])
@@ -357,8 +439,10 @@ async def get_item_recommendations(
     tmdb_id: int,
     user: CurrentUser,
     media_type: str,
+    limit: int = _ROW_DEFAULT_LIMIT,
 ) -> list[MediaSummaryResponse]:
     _validate_media_type(media_type)
+    limit = _normalize_limit(limit)
     api_key = _require_tmdb_key()
     async with httpx.AsyncClient(timeout=15) as http:
         tmdb = TmdbClient(api_key=api_key, http=http)
@@ -374,7 +458,7 @@ async def get_item_recommendations(
                 e,
             )
             return []
-    return [_to_summary(i) for i in items[:_ROW_LIMIT]]
+    return [_to_summary(i) for i in items[:limit]]
 
 
 @router.get("/{tmdb_id}", response_model=CatalogItemResponse)
