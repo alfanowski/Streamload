@@ -193,3 +193,62 @@ async def test_top_rated_tv_endpoint():
     assert items[0].media_type == "tv"
     called_url = http.get.call_args[0][0]
     assert called_url.endswith("/tv/top_rated")
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Person endpoints (Pass 3 CAST-1) — bio + combined filmography. These
+# return raw TMDB dicts; the API route handles shaping into PersonResponse
+# and MediaSummary-style entries.
+# ──────────────────────────────────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_get_person_returns_raw_dict():
+    http = MagicMock()
+    http.get = AsyncMock(return_value=_mk_resp({
+        "id": 287,
+        "name": "Brad Pitt",
+        "biography": "American actor.",
+        "birthday": "1963-12-18",
+        "deathday": None,
+        "place_of_birth": "Shawnee, Oklahoma, USA",
+        "profile_path": "/profile.jpg",
+        "also_known_as": ["Brad", "Pitt"],
+        "known_for_department": "Acting",
+        "popularity": 12.5,
+    }))
+    client = TmdbClient(api_key="x", http=http)
+    data = await client.get_person(287)
+    assert data["id"] == 287
+    assert data["name"] == "Brad Pitt"
+    assert data["birthday"] == "1963-12-18"
+    called_url = http.get.call_args[0][0]
+    assert called_url.endswith("/person/287")
+    # Person endpoint asks for images via append_to_response to surface
+    # additional profile photos when present.
+    called_params = http.get.call_args.kwargs.get("params", {})
+    assert called_params.get("append_to_response") == "images"
+
+
+@pytest.mark.asyncio
+async def test_get_person_credits_returns_raw_dict():
+    http = MagicMock()
+    http.get = AsyncMock(return_value=_mk_resp({
+        "id": 287,
+        "cast": [
+            {"id": 1, "media_type": "movie", "title": "Foo", "character": "Hero",
+             "release_date": "2010-01-01", "poster_path": "/p.jpg", "vote_average": 7.2,
+             "popularity": 30.0},
+        ],
+        "crew": [
+            {"id": 2, "media_type": "tv", "name": "Bar", "job": "Director",
+             "first_air_date": "2015-01-01", "poster_path": "/b.jpg", "vote_average": 8.0,
+             "popularity": 14.0},
+        ],
+    }))
+    client = TmdbClient(api_key="x", http=http)
+    data = await client.get_person_credits(287)
+    assert data["cast"][0]["title"] == "Foo"
+    assert data["crew"][0]["name"] == "Bar"
+    called_url = http.get.call_args[0][0]
+    assert called_url.endswith("/person/287/combined_credits")

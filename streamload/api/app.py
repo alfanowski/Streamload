@@ -148,6 +148,7 @@ def create_app() -> FastAPI:
     app.include_router(auth.router, prefix="/api")
     app.include_router(auth_github.router, prefix="/api")
     app.include_router(catalog.router, prefix="/api")
+    app.include_router(catalog.person_router, prefix="/api")
     app.include_router(collections.router, prefix="/api")
     app.include_router(email.router, prefix="/api")
     app.include_router(health.router, prefix="/api")

@@ -16,12 +16,17 @@ from pydantic import BaseModel
 from streamload.api.deps import CurrentUser, SessionDep
 from streamload.catalog.ingest import ingest_single_title
 from streamload.catalog.service import CatalogService
-from streamload.catalog.tmdb import TmdbClient, TmdbItem
+from streamload.catalog.tmdb import TmdbClient, TmdbItem, _is_real_title, _parse_year
 from streamload.utils.logger import get_logger
 
 log = get_logger(__name__)
 
 router = APIRouter(prefix="/catalog", tags=["catalog"])
+# Person bio + filmography proxy lives alongside catalog (same TmdbClient,
+# same auth dep) but under its own `/person` prefix so the URLs read
+# naturally — `/api/person/287` for the PersonPage, `/api/person/287/credits`
+# for the filmography row.
+person_router = APIRouter(prefix="/person", tags=["person"])
 
 
 class SourceResponse(BaseModel):
@@ -503,3 +508,145 @@ async def get_item(
         genres=item.genres,
         sources=[],
     )
+
+
+# ──────────────────────────────────────────────────────────────────────────
+# Person endpoints (Pass 3 CAST-1) — bio + combined filmography. Cast cards
+# on the title page link here; the page renders an editorial hero plus a
+# popularity-sorted PosterRow of every movie / tv the person appeared in
+# (or directed).
+# ──────────────────────────────────────────────────────────────────────────
+
+
+class PersonResponse(BaseModel):
+    tmdb_id: int
+    name: str
+    biography: str | None = None
+    birthday: str | None = None     # ISO date "YYYY-MM-DD"
+    deathday: str | None = None     # ISO date or null
+    place_of_birth: str | None = None
+    profile_url: str | None = None  # w500 — used in the editorial hero
+    also_known_as: list[str] = []
+    known_for_department: str | None = None
+
+
+class PersonCreditItemResponse(BaseModel):
+    """MediaSummary-shaped entry for the Filmografia row. Mirrors
+    ``MediaSummaryResponse`` above but adds ``character`` so the row can
+    show "as Daniel Plainview" under each title if we ever want it."""
+    tmdb_id: int
+    media_type: str
+    title: str
+    year: int | None = None
+    poster_url: str | None = None
+    backdrop_url: str | None = None
+    character: str | None = None
+
+
+@person_router.get("/{person_id}", response_model=PersonResponse)
+async def get_person(
+    person_id: int,
+    user: CurrentUser,
+) -> PersonResponse:
+    api_key = _require_tmdb_key()
+    async with httpx.AsyncClient(timeout=15) as http:
+        tmdb = TmdbClient(api_key=api_key, http=http)
+        try:
+            data = await tmdb.get_person(person_id)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                raise HTTPException(
+                    status.HTTP_404_NOT_FOUND, "person not found on TMDB",
+                )
+            log.warning("TMDB person %s error: %s", person_id, e)
+            raise HTTPException(
+                status.HTTP_502_BAD_GATEWAY, "TMDB upstream error",
+            )
+        return PersonResponse(
+            tmdb_id=int(data.get("id") or person_id),
+            name=str(data.get("name") or ""),
+            biography=(data.get("biography") or None),
+            birthday=data.get("birthday"),
+            deathday=data.get("deathday"),
+            place_of_birth=data.get("place_of_birth"),
+            # w500 = editorial hero size. Same TMDB CDN, just a bigger
+            # variant than the w185 thumbnails the CastCard uses.
+            profile_url=tmdb.image_url(data.get("profile_path"), size="w500"),
+            also_known_as=list(data.get("also_known_as") or []),
+            known_for_department=data.get("known_for_department"),
+        )
+
+
+@person_router.get(
+    "/{person_id}/credits", response_model=list[PersonCreditItemResponse],
+)
+async def get_person_credits(
+    person_id: int,
+    user: CurrentUser,
+) -> list[PersonCreditItemResponse]:
+    """Combined movies + tv where the person was cast or crewed.
+
+    TMDB returns separate ``cast`` and ``crew`` arrays — we union them,
+    dedupe by ``(tmdb_id, media_type)`` (preferring the cast entry so
+    we keep the character name), apply the same poster + title quality
+    filter the row endpoints use (drops fresh-upload spam), and sort
+    desc by popularity so the most recognisable titles surface first.
+    """
+    api_key = _require_tmdb_key()
+    async with httpx.AsyncClient(timeout=15) as http:
+        tmdb = TmdbClient(api_key=api_key, http=http)
+        try:
+            data = await tmdb.get_person_credits(person_id)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return []
+            log.warning(
+                "TMDB person credits %s error: %s", person_id, e,
+            )
+            return []
+
+    # Cast entries win the dedup: they carry the `character` field.
+    raw_cast = list(data.get("cast", []))
+    raw_crew = list(data.get("crew", []))
+    by_key: dict[tuple[int, str], dict] = {}
+    for entry in raw_cast:
+        key = (int(entry.get("id") or 0), str(entry.get("media_type") or ""))
+        if key[0] and key[1] and key not in by_key:
+            by_key[key] = {"raw": entry, "from_cast": True}
+    for entry in raw_crew:
+        key = (int(entry.get("id") or 0), str(entry.get("media_type") or ""))
+        if key[0] and key[1] and key not in by_key:
+            by_key[key] = {"raw": entry, "from_cast": False}
+
+    items: list[tuple[float, PersonCreditItemResponse]] = []
+    for (tmdb_id, media_type), bundle in by_key.items():
+        raw = bundle["raw"]
+        if media_type not in ("movie", "tv"):
+            continue
+        # TV uses `name` + `first_air_date`; movies use `title` + `release_date`.
+        title = (raw.get("title") if media_type == "movie" else raw.get("name")) or ""
+        date_str = (
+            raw.get("release_date") if media_type == "movie"
+            else raw.get("first_air_date")
+        )
+        poster_url = tmdb.image_url(raw.get("poster_path"))
+        backdrop_url = tmdb.image_url(raw.get("backdrop_path"), size="w1280")
+        # Same quality bar as catalog rows — no posterless items, no
+        # emoji/digit spam titles. Actors' filmographies have lots of
+        # community uploads that don't pass these checks.
+        if not poster_url or not _is_real_title(title):
+            continue
+        item = PersonCreditItemResponse(
+            tmdb_id=tmdb_id,
+            media_type=media_type,
+            title=title,
+            year=_parse_year(date_str),
+            poster_url=poster_url,
+            backdrop_url=backdrop_url,
+            character=raw.get("character") if bundle["from_cast"] else None,
+        )
+        popularity = float(raw.get("popularity") or 0.0)
+        items.append((popularity, item))
+
+    items.sort(key=lambda pair: pair[0], reverse=True)
+    return [item for _pop, item in items]

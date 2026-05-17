@@ -330,6 +330,29 @@ class TmdbClient:
         """
         return await self._get(f"/{media_type}/{tmdb_id}/credits")
 
+    async def get_person(self, person_id: int) -> dict:
+        """Raw ``/person/{id}`` payload — bio + birthday + profile path.
+
+        ``append_to_response=images`` pulls additional profile photos in
+        the same round-trip so a future "photo gallery" on the person
+        page doesn't need a second call. We return the raw dict; the API
+        route shapes it into a PersonResponse.
+        """
+        return await self._get(
+            f"/person/{person_id}",
+            {"append_to_response": "images"},
+        )
+
+    async def get_person_credits(self, person_id: int) -> dict:
+        """Raw ``/person/{id}/combined_credits`` payload (cast + crew).
+
+        Combined endpoint returns movies AND tv together with a
+        ``media_type`` discriminator on each entry — perfect for the
+        Filmografia row that mixes both. API route handles dedup +
+        quality filter + popularity sort.
+        """
+        return await self._get(f"/person/{person_id}/combined_credits")
+
     async def search_multi(self, query: str, *, page: int = 1) -> list[TmdbItem]:
         data = await self._get("/search/multi", {"query": query, "page": page})
         results = []
