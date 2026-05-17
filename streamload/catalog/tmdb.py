@@ -19,6 +19,18 @@ log = get_logger(__name__)
 _BASE = "https://api.themoviedb.org/3"
 _IMG_BASE = "https://image.tmdb.org/t/p"
 
+# Western catalog — countries our Italian plugins (sc / au / rai) actually
+# cover. Used by discover_* + new_releases as `with_origin_country` so the
+# Home doesn't surface Korean dramas / Turkish soaps / Indian regional
+# titles that the user can't play. Anime is the explicit exception (see
+# `discover_anime`, which keeps JP origin).
+_WESTERN_COUNTRIES = "US|GB|IT|FR|ES|DE|CA|AU|IE|NL|BE|SE|NO|DK|FI|PT|CH|AT|NZ"
+
+# Minimum TMDB vote_count to surface a title in a row. TMDB indexes every
+# upload, including fresh spam ("★1★888★633★4176★ Why") — filtering by
+# >=20 votes drops the chaff without losing genuine indie/regional titles.
+_VOTE_FLOOR = 20
+
 
 @dataclass
 class TmdbItem:
@@ -43,6 +55,36 @@ def _parse_year(date_str: Optional[str]) -> Optional[int]:
         return int(date_str[:4])
     except ValueError:
         return None
+
+
+def _is_real_title(t: Optional[str]) -> bool:
+    """Reject titles that are mostly emoji / punctuation / digits.
+
+    Used to drop TMDB spam entries that surface in fresh `discover` queries
+    (e.g. "★1★888★633★4176★ Why"). Real titles have ≥3 letters AND letters
+    make up ≥30% of the visible characters. The combination rejects the
+    spam ("Why" alone with 3 letters but 12.5% letter ratio) without
+    hurting legit short titles ("Foo", "FRom", "M*A*S*H").
+    """
+    if not t:
+        return False
+    letters = "".join(c for c in t if c.isalpha())
+    if len(letters) < 3:
+        return False
+    if len(letters) / max(len(t), 1) < 0.3:
+        return False
+    return True
+
+
+def _quality_filter(items: list["TmdbItem"]) -> list["TmdbItem"]:
+    """Drop items that have no poster OR a junk title.
+
+    Trending / discover endpoints occasionally return entries without art
+    (community uploads pending image review) or with spam titles. Both
+    render badly in the row UI (gray ciak placeholder + unreadable label)
+    so we filter them out at the API edge.
+    """
+    return [it for it in items if it.poster_url and _is_real_title(it.title)]
 
 
 class TmdbClient:
@@ -109,44 +151,49 @@ class TmdbClient:
 
     async def popular_movies(self, *, page: int = 1) -> list[TmdbItem]:
         data = await self._get("/movie/popular", {"page": page})
-        return [self._parse_movie(x) for x in data.get("results", [])]
+        return _quality_filter([self._parse_movie(x) for x in data.get("results", [])])
 
     async def popular_tv(self, *, page: int = 1) -> list[TmdbItem]:
         data = await self._get("/tv/popular", {"page": page})
-        return [self._parse_tv(x) for x in data.get("results", [])]
+        return _quality_filter([self._parse_tv(x) for x in data.get("results", [])])
 
     async def top_rated_movies(self, *, page: int = 1) -> list[TmdbItem]:
         data = await self._get("/movie/top_rated", {"page": page})
-        return [self._parse_movie(x) for x in data.get("results", [])]
+        return _quality_filter([self._parse_movie(x) for x in data.get("results", [])])
 
     async def top_rated_tv(self, *, page: int = 1) -> list[TmdbItem]:
         data = await self._get("/tv/top_rated", {"page": page})
-        return [self._parse_tv(x) for x in data.get("results", [])]
+        return _quality_filter([self._parse_tv(x) for x in data.get("results", [])])
 
     async def trending_day(self, *, media_type: str = "all", page: int = 1) -> list[TmdbItem]:
         """``media_type`` is one of ``all``/``movie``/``tv``."""
         data = await self._get(f"/trending/{media_type}/day", {"page": page})
         default = "tv" if media_type == "tv" else "movie"
-        return [
+        items = [
             self._parse_search_or_collection_item(x, default_type=default)
             for x in data.get("results", [])
         ]
+        return _quality_filter(items)
 
     async def trending_week(self, *, media_type: str = "all", page: int = 1) -> list[TmdbItem]:
         data = await self._get(f"/trending/{media_type}/week", {"page": page})
         default = "tv" if media_type == "tv" else "movie"
-        return [
+        items = [
             self._parse_search_or_collection_item(x, default_type=default)
             for x in data.get("results", [])
         ]
+        return _quality_filter(items)
 
     async def discover_movies_by_genre(self, *, genre_ids: list[int], page: int = 1) -> list[TmdbItem]:
         data = await self._get("/discover/movie", {
             "with_genres": ",".join(str(g) for g in genre_ids),
+            "with_origin_country": _WESTERN_COUNTRIES,
+            "vote_count.gte": _VOTE_FLOOR,
+            "include_adult": "false",
             "sort_by": "popularity.desc",
             "page": page,
         })
-        return [self._parse_movie(x) for x in data.get("results", [])]
+        return _quality_filter([self._parse_movie(x) for x in data.get("results", [])])
 
     async def discover_by_genre(
         self,
@@ -158,13 +205,18 @@ class TmdbClient:
     ) -> list[TmdbItem]:
         """Discover ``movie`` or ``tv`` items filtered by genre IDs.
 
-        Optional ``original_language`` lets Home rows like "Commedie italiane"
+        Western-origin only (the plugins we ship don't cover Korean / Indian
+        / Turkish catalogs). Vote floor drops fresh-upload spam. Optional
+        ``original_language`` lets Home rows like "Commedie italiane"
         constrain results to a specific language (``it``).
         """
         if media_type not in ("movie", "tv"):
             raise ValueError("media_type must be 'movie' or 'tv'")
         params: dict[str, Any] = {
             "with_genres": ",".join(str(g) for g in genre_ids),
+            "with_origin_country": _WESTERN_COUNTRIES,
+            "vote_count.gte": _VOTE_FLOOR,
+            "include_adult": "false",
             "sort_by": "popularity.desc",
             "page": page,
         }
@@ -172,7 +224,7 @@ class TmdbClient:
             params["with_original_language"] = original_language
         data = await self._get(f"/discover/{media_type}", params)
         parser = self._parse_movie if media_type == "movie" else self._parse_tv
-        return [parser(x) for x in data.get("results", [])]
+        return _quality_filter([parser(x) for x in data.get("results", [])])
 
     async def new_releases(
         self,
@@ -181,12 +233,13 @@ class TmdbClient:
         days: int = 60,
         page: int = 1,
     ) -> list[TmdbItem]:
-        """Recent releases sorted by date — the last ``days`` days.
+        """Recent releases inside a ``days``-wide window, sorted by popularity.
 
-        Movies use ``primary_release_date``; TV uses ``first_air_date``. The
-        TMDB API requires the ``.gte`` / ``.lte`` window to narrow "new" to a
-        believable window — without it we get every movie ever made sorted by
-        release date, which means a bunch of 1900s shorts at the top.
+        Was previously sorted by release date ascending — that surfaced
+        every spam upload of the last hour ("★1★888★633★4176★ Why" etc.).
+        Now we keep the date window but sort by popularity so legit new
+        releases bubble up. Vote floor + Western-origin + poster filter
+        drop the rest.
         """
         if media_type not in ("movie", "tv"):
             raise ValueError("media_type must be 'movie' or 'tv'")
@@ -194,23 +247,28 @@ class TmdbClient:
 
         today = datetime.now(UTC).date()
         floor = today - timedelta(days=days)
+        common: dict[str, Any] = {
+            "sort_by": "popularity.desc",
+            "with_origin_country": _WESTERN_COUNTRIES,
+            "vote_count.gte": _VOTE_FLOOR,
+            "include_adult": "false",
+            "page": page,
+        }
         if media_type == "movie":
             params: dict[str, Any] = {
-                "sort_by": "primary_release_date.desc",
+                **common,
                 "primary_release_date.gte": floor.isoformat(),
                 "primary_release_date.lte": today.isoformat(),
-                "page": page,
             }
         else:
             params = {
-                "sort_by": "first_air_date.desc",
+                **common,
                 "first_air_date.gte": floor.isoformat(),
                 "first_air_date.lte": today.isoformat(),
-                "page": page,
             }
         data = await self._get(f"/discover/{media_type}", params)
         parser = self._parse_movie if media_type == "movie" else self._parse_tv
-        return [parser(x) for x in data.get("results", [])]
+        return _quality_filter([parser(x) for x in data.get("results", [])])
 
     async def similar(self, tmdb_id: int, *, media_type: str, page: int = 1) -> list[TmdbItem]:
         if media_type not in ("movie", "tv"):
@@ -227,14 +285,16 @@ class TmdbClient:
         return [parser(x) for x in data.get("results", [])]
 
     async def discover_anime(self, *, page: int = 1) -> list[TmdbItem]:
-        # Anime: TV with genre 16 (Animation) + origin country JP.
+        # Anime: TV with genre 16 (Animation) + origin country JP. Keep the
+        # JP filter — anime IS the intended exception to the Western default.
         data = await self._get("/discover/tv", {
             "with_genres": "16",
             "with_origin_country": "JP",
+            "vote_count.gte": _VOTE_FLOOR,
             "sort_by": "popularity.desc",
             "page": page,
         })
-        return [self._parse_tv(x) for x in data.get("results", [])]
+        return _quality_filter([self._parse_tv(x) for x in data.get("results", [])])
 
     async def get_movie(self, tmdb_id: int) -> TmdbItem:
         data = await self._get(f"/movie/{tmdb_id}")

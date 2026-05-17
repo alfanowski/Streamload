@@ -109,7 +109,7 @@ async def test_trending_day_with_media_type_filter():
     http = MagicMock()
     http.get = AsyncMock(return_value=_mk_resp({
         "results": [
-            {"id": 1, "title": "M", "release_date": "2025-01-01", "poster_path": "/p.jpg"},
+            {"id": 1, "title": "Movie One", "release_date": "2025-01-01", "poster_path": "/p.jpg"},
         ]
     }))
     client = TmdbClient(api_key="x", http=http)
@@ -124,7 +124,7 @@ async def test_discover_by_genre_movie_with_language():
     http = MagicMock()
     http.get = AsyncMock(return_value=_mk_resp({
         "results": [
-            {"id": 1, "title": "C", "release_date": "2024-01-01", "poster_path": "/p.jpg"},
+            {"id": 1, "title": "Commedia", "release_date": "2024-01-01", "poster_path": "/p.jpg"},
         ]
     }))
     client = TmdbClient(api_key="x", http=http)
@@ -142,14 +142,16 @@ async def test_new_releases_movie_uses_release_date_window():
     http = MagicMock()
     http.get = AsyncMock(return_value=_mk_resp({
         "results": [
-            {"id": 1, "title": "N", "release_date": "2025-04-01", "poster_path": "/p.jpg"},
+            {"id": 1, "title": "Nuovo Film", "release_date": "2025-04-01", "poster_path": "/p.jpg"},
         ]
     }))
     client = TmdbClient(api_key="x", http=http)
     items = await client.new_releases(media_type="movie", days=30)
     assert len(items) == 1
     called_params = http.get.call_args.kwargs.get("params", {})
-    assert called_params.get("sort_by") == "primary_release_date.desc"
+    # new_releases now sorts by popularity to avoid the date-desc spam tail
+    # of fresh-upload junk on TMDB (see _is_real_title docstring).
+    assert called_params.get("sort_by") == "popularity.desc"
     assert "primary_release_date.gte" in called_params
 
 
@@ -160,7 +162,10 @@ async def test_new_releases_tv_uses_first_air_date_window():
     client = TmdbClient(api_key="x", http=http)
     await client.new_releases(media_type="tv", days=60)
     called_params = http.get.call_args.kwargs.get("params", {})
-    assert called_params.get("sort_by") == "first_air_date.desc"
+    # new_releases sorts by popularity (see test_new_releases_movie_* note).
+    # The window is still TV-shaped though — first_air_date instead of
+    # primary_release_date.
+    assert called_params.get("sort_by") == "popularity.desc"
     assert "first_air_date.gte" in called_params
 
 

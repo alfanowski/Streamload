@@ -353,19 +353,32 @@ async def test_rows_recommendations_endpoint(api_client, authed, monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_rows_caps_at_20(api_client, authed, monkeypatch):
-    """Each row endpoint should cap at 20 items even when TMDB returns more."""
+async def test_rows_caps_at_limit(api_client, authed, monkeypatch):
+    """Row endpoints accept ``?limit=N`` (default 60, cap 100) — the
+    response should never exceed the requested limit even when TMDB pages
+    back more results."""
     monkeypatch.setenv("TMDB_API_KEY", "test-key")
 
     async def fake_week(self, *, media_type="all", page=1):
-        return [_summary_item(tmdb_id=i, title=f"t{i}") for i in range(50)]
+        # Return 50 per page — caller fans out across pages until limit hit.
+        base = (page - 1) * 50
+        return [
+            _summary_item(tmdb_id=base + i, title=f"Movie Title {base + i}")
+            for i in range(50)
+        ]
 
     monkeypatch.setattr(
         "streamload.api.routes.catalog.TmdbClient.trending_week", fake_week,
     )
+    # Default limit (60).
     r = await api_client.get("/api/catalog/rows/trending")
     assert r.status_code == 200
-    assert len(r.json()) == 20
+    assert len(r.json()) == 60
+
+    # Explicit smaller cap.
+    r = await api_client.get("/api/catalog/rows/trending?limit=15")
+    assert r.status_code == 200
+    assert len(r.json()) == 15
 
 
 @pytest.mark.asyncio
