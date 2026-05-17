@@ -206,15 +206,18 @@ async def get_item_videos(
 # Used by the client's PosterRow / BackdropRow components. Each row endpoint
 # is independent so a slow / failing row doesn't block the whole page.
 #
-# Caller picks the row length via the ``limit`` query param (default 40,
+# Caller picks the row length via the ``limit`` query param (default 60,
 # capped at 100 — TMDB returns 20 per page, so >20 means we fetch multiple
 # pages and concat). The ``page`` param lets a future "Vedi tutti" grid
 # paginate beyond the first slice.
 # ──────────────────────────────────────────────────────────────────────────
 
-# Default row length — bumped from 20 → 40 per operator (May 16): home
-# rows felt repetitive, more horizontal content per row helps.
-_ROW_DEFAULT_LIMIT = 40
+# Default row length — bumped across two passes per operator: May 16
+# 20→40, May 17 40→60. The bigger jump is for "always same ugly titles"
+# (P6): at 40 the horizontal scroll still felt thin compared to Netflix
+# rows; 60 = 3 TMDB pages, ~3 full viewport widths of scrollable
+# content per row.
+_ROW_DEFAULT_LIMIT = 60
 # Hard ceiling so a buggy / malicious caller can't force us to fan out
 # 50 TMDB requests per row.
 _ROW_MAX_LIMIT = 100
