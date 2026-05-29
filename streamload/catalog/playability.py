@@ -78,3 +78,44 @@ def heuristic_score(item: TmdbItem, *, is_anime_row: bool = False) -> float:
         score += _W_RECENCY
 
     return max(0.0, min(100.0, score))
+
+
+# Items scoring >= this go in the "playable-likely" bucket. The heuristic
+# midpoint: an item needs origin OR (language + some popularity) to clear it.
+# Tunable; documented in the spec.
+_BUCKET_THRESHOLD = 40.0
+
+
+def rank_by_playability(
+    items: list[TmdbItem],
+    crowd_map: "dict[tuple[int, str], CrowdCounts] | None" = None,
+    *,
+    is_anime_row: bool = False,
+) -> list[TmdbItem]:
+    """Stable bucket sort: playable-likely items first (in original order),
+    then the rest (in original order). NEVER drops or dedupes items.
+
+    ``crowd_map`` is the Phase 2 signal (keyed by ``(tmdb_id, media_type)``);
+    when None or empty the ranking is pure heuristic.
+    """
+    bucket_a: list[TmdbItem] = []
+    bucket_b: list[TmdbItem] = []
+    for it in items:
+        total = heuristic_score(it, is_anime_row=is_anime_row)
+        if crowd_map:
+            counts = crowd_map.get((it.tmdb_id, it.media_type))
+            if counts is not None:
+                total += crowd_score(counts)
+        (bucket_a if total >= _BUCKET_THRESHOLD else bucket_b).append(it)
+    return bucket_a + bucket_b
+
+
+# --- Phase 2 placeholder (replaced in Task 9) -------------------------------
+# Defined here so rank_by_playability imports cleanly in Phase 1. Task 9
+# replaces both this and the CrowdCounts type with the real implementation.
+class CrowdCounts:  # noqa: D401 - placeholder
+    pass
+
+
+def crowd_score(counts: "CrowdCounts") -> float:
+    return 0.0

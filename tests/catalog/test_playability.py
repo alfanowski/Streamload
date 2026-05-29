@@ -1,4 +1,4 @@
-from streamload.catalog.playability import heuristic_score
+from streamload.catalog.playability import heuristic_score, rank_by_playability
 from streamload.catalog.tmdb import TmdbItem
 
 
@@ -48,3 +48,29 @@ def test_score_is_bounded_0_100():
                   origin_country=["IT"], year=2025)
     s = heuristic_score(maxed)
     assert 0.0 <= s <= 100.0
+
+
+def test_bucket_sort_floats_playable_up_preserving_intra_order():
+    a = _item(tmdb_id=1, origin_country=["US"], original_language="en")
+    b = _item(tmdb_id=2, origin_country=["KR"], original_language="ko",
+              vote_count=1, popularity=0.1)
+    c = _item(tmdb_id=3, origin_country=["GB"], original_language="en")
+    d = _item(tmdb_id=4, origin_country=["JP"], original_language="ja",
+              vote_count=1, popularity=0.1)
+    ranked = rank_by_playability([a, b, c, d])
+    ids = [i.tmdb_id for i in ranked]
+    assert ids == [1, 3, 2, 4]
+
+
+def test_rank_preserves_all_items_no_drops():
+    items = [_item(tmdb_id=i) for i in range(10)]
+    ranked = rank_by_playability(items)
+    assert sorted(i.tmdb_id for i in ranked) == list(range(10))
+
+
+def test_anime_row_ranks_jp_first():
+    jp = _item(tmdb_id=1, media_type="tv", origin_country=["JP"], original_language="ja")
+    us = _item(tmdb_id=2, media_type="tv", origin_country=["US"], original_language="en",
+               vote_count=1, popularity=0.1)
+    ranked = rank_by_playability([us, jp], is_anime_row=True)
+    assert [i.tmdb_id for i in ranked] == [1, 2]
