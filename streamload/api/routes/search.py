@@ -27,9 +27,18 @@ class SearchResult(BaseModel):
     poster_url: str | None
 
 
+class SearchPerson(BaseModel):
+    tmdb_id: int
+    name: str
+    profile_url: str | None
+    department: str | None
+    known_for: list[str]
+
+
 class SearchResponse(BaseModel):
     query: str
     results: list[SearchResult]
+    people: list[SearchPerson]
 
 
 def _build_tmdb_client(http: httpx.AsyncClient) -> TmdbClient:
@@ -53,13 +62,17 @@ async def search(
         db.add(SearchHistory(user_id=user.id, query_text=q, query_hash=qh))
     result_count = 0
     items = []
+    people = []
     try:
         async with httpx.AsyncClient(timeout=15) as http:
             client = _build_tmdb_client(http)
-            items = await client.search_multi(q, page=page)
-        result_count = len(items)
+            bundle = await client.search_multi_all(q, page=page)
+        items = bundle["titles"]
+        people = bundle["people"]
+        result_count = len(items) + len(people)
     except Exception:
         items = []
+        people = []
         log.warning("TMDB search failed for %r (page=%d)", q, page, exc_info=True)
     finally:
         if page == 1:
@@ -74,5 +87,11 @@ async def search(
                 tmdb_id=i.tmdb_id, media_type=i.media_type,
                 title=i.title, year=i.year, poster_url=i.poster_url,
             ) for i in items
+        ],
+        people=[
+            SearchPerson(
+                tmdb_id=p.tmdb_id, name=p.name, profile_url=p.profile_url,
+                department=p.known_for_department, known_for=p.known_for_titles,
+            ) for p in people
         ],
     )

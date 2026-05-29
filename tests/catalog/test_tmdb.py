@@ -85,6 +85,61 @@ async def test_search_returns_typed_items():
 
 
 @pytest.mark.asyncio
+async def test_search_multi_all_parses_titles_and_people():
+    http = MagicMock()
+    http.get = AsyncMock(return_value=_mk_resp({
+        "results": [
+            {"id": 287, "media_type": "person", "name": "Brad Pitt",
+             "known_for_department": "Acting", "profile_path": "/m09.jpg",
+             "known_for": [
+                 {"media_type": "movie", "id": 16869, "title": "Bastardi"},
+                 {"media_type": "tv", "id": 1, "name": "A Show"},
+             ]},
+            {"id": 9, "title": "A Movie", "release_date": "2020-01-01",
+             "media_type": "movie", "poster_path": "/m.jpg"},
+        ]
+    }))
+    client = TmdbClient(api_key="x", http=http)
+    bundle = await client.search_multi_all("brad")
+    assert len(bundle["titles"]) == 1
+    assert bundle["titles"][0].media_type == "movie"
+    assert len(bundle["people"]) == 1
+    person = bundle["people"][0]
+    assert person.tmdb_id == 287
+    assert person.name == "Brad Pitt"
+    assert person.known_for_department == "Acting"
+    assert person.profile_url.endswith("/m09.jpg")
+    assert person.known_for_titles == ["Bastardi", "A Show"]
+
+
+@pytest.mark.asyncio
+async def test_search_multi_all_keeps_people_without_photo_drops_noise():
+    http = MagicMock()
+    http.get = AsyncMock(return_value=_mk_resp({
+        "results": [
+            # Actor with no profile_path but a known department → kept.
+            {"id": 1, "media_type": "person", "name": "No Photo Actor",
+             "known_for_department": "Acting", "profile_path": None,
+             "known_for": []},
+            # Crew with off-list department AND no credits → dropped as noise.
+            {"id": 2, "media_type": "person", "name": "Caterer",
+             "known_for_department": "Crew", "profile_path": None,
+             "known_for": []},
+            # Off-list department but HAS credits → kept.
+            {"id": 3, "media_type": "person", "name": "Sound Person",
+             "known_for_department": "Sound", "profile_path": "/s.jpg",
+             "known_for": [{"media_type": "movie", "title": "Loud"}]},
+        ]
+    }))
+    client = TmdbClient(api_key="x", http=http)
+    bundle = await client.search_multi_all("x")
+    kept = {p.tmdb_id for p in bundle["people"]}
+    assert kept == {1, 3}
+    no_photo = next(p for p in bundle["people"] if p.tmdb_id == 1)
+    assert no_photo.profile_url is None
+
+
+@pytest.mark.asyncio
 async def test_image_url_uses_w500_default():
     http = MagicMock()
     client = TmdbClient(api_key="x", http=http)

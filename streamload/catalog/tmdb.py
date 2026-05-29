@@ -48,6 +48,21 @@ class TmdbItem:
     genres: list[str] = field(default_factory=list)
 
 
+@dataclass
+class TmdbPerson:
+    tmdb_id: int
+    name: str
+    profile_url: Optional[str] = None
+    known_for_department: Optional[str] = None
+    known_for_titles: list[str] = field(default_factory=list)
+
+
+# Departments we keep even when known_for is empty. Anyone outside this set
+# AND with no notable credits is almost always crew noise (sound assistants,
+# caterers) that TMDB indexes but the operator never wants surfaced.
+_PEOPLE_DEPARTMENTS = {"Acting", "Directing", "Writing", "Production"}
+
+
 def _parse_year(date_str: Optional[str]) -> Optional[int]:
     if not date_str or len(date_str) < 4:
         return None
@@ -362,3 +377,43 @@ class TmdbClient:
                 continue
             results.append(self._parse_search_or_collection_item(x))
         return results
+
+    def _parse_person(self, data: dict) -> TmdbPerson:
+        # `known_for` carries up to 3 of the person's most famous titles.
+        # Movies expose `title`, tv exposes `name`.
+        known_for_titles = []
+        for kf in data.get("known_for", []) or []:
+            name = kf.get("title") or kf.get("name")
+            if name:
+                known_for_titles.append(name)
+        return TmdbPerson(
+            tmdb_id=int(data["id"]),
+            name=data.get("name") or "",
+            profile_url=self.image_url(data.get("profile_path")),
+            known_for_department=data.get("known_for_department"),
+            known_for_titles=known_for_titles,
+        )
+
+    async def search_multi_all(self, query: str, *, page: int = 1) -> dict:
+        """Parse BOTH titles and people from /search/multi.
+
+        Returns ``{"titles": list[TmdbItem], "people": list[TmdbPerson]}``.
+        People without a profile photo are still included (the client shows
+        a fallback avatar), but crew with a department outside
+        ``_PEOPLE_DEPARTMENTS`` AND no notable credits are dropped — those
+        are typically TMDB noise the operator never wants surfaced.
+        """
+        data = await self._get("/search/multi", {"query": query, "page": page})
+        titles: list[TmdbItem] = []
+        people: list[TmdbPerson] = []
+        for x in data.get("results", []):
+            mt = x.get("media_type")
+            if mt in ("movie", "tv"):
+                titles.append(self._parse_search_or_collection_item(x))
+            elif mt == "person":
+                person = self._parse_person(x)
+                if (person.known_for_department not in _PEOPLE_DEPARTMENTS
+                        and not person.known_for_titles):
+                    continue
+                people.append(person)
+        return {"titles": titles, "people": people}
