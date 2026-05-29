@@ -228,6 +228,36 @@ async def test_discover_by_genre_movie_with_language():
 
 
 @pytest.mark.asyncio
+async def test_discover_by_genre_jp_origin_uses_jp_country():
+    http = MagicMock()
+    http.get = AsyncMock(return_value=_mk_resp({
+        "results": [
+            {"id": 1, "name": "Anime", "first_air_date": "2024-01-01",
+             "poster_path": "/p.jpg", "vote_count": 100},
+        ]
+    }))
+    client = TmdbClient(api_key="x", http=http)
+    await client.discover_by_genre(genre_ids=[16], media_type="tv", origin="jp")
+    params = http.get.call_args.kwargs.get("params", {})
+    assert params.get("with_origin_country") == "JP"
+
+
+@pytest.mark.asyncio
+async def test_discover_by_genre_western_origin_is_default():
+    http = MagicMock()
+    http.get = AsyncMock(return_value=_mk_resp({
+        "results": [
+            {"id": 1, "title": "Film", "release_date": "2024-01-01",
+             "poster_path": "/p.jpg", "vote_count": 100},
+        ]
+    }))
+    client = TmdbClient(api_key="x", http=http)
+    await client.discover_by_genre(genre_ids=[35], media_type="movie")
+    params = http.get.call_args.kwargs.get("params", {})
+    assert "|" in params.get("with_origin_country", "")  # the Western list
+
+
+@pytest.mark.asyncio
 async def test_new_releases_movie_uses_release_date_window():
     http = MagicMock()
     http.get = AsyncMock(return_value=_mk_resp({

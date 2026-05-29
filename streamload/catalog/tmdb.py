@@ -230,20 +230,24 @@ class TmdbClient:
         genre_ids: list[int],
         media_type: str,
         original_language: str | None = None,
+        origin: str = "western",
         page: int = 1,
     ) -> list[TmdbItem]:
         """Discover ``movie`` or ``tv`` items filtered by genre IDs.
 
-        Western-origin only (the plugins we ship don't cover Korean / Indian
-        / Turkish catalogs). Vote floor drops fresh-upload spam. Optional
-        ``original_language`` lets Home rows like "Commedie italiane"
-        constrain results to a specific language (``it``).
+        ``origin`` controls the country filter: ``western`` (default) uses the
+        Western country list (the plugins don't cover Korean / Indian / Turkish
+        catalogs); ``jp`` restricts to Japan — used by the Anime rows so they
+        surface real Japanese anime instead of Western cartoons. Vote floor
+        drops fresh-upload spam. Optional ``original_language`` lets rows like
+        "Commedie italiane" constrain to a specific language (``it``).
         """
         if media_type not in ("movie", "tv"):
             raise ValueError("media_type must be 'movie' or 'tv'")
+        country = "JP" if origin == "jp" else _WESTERN_COUNTRIES
         params: dict[str, Any] = {
             "with_genres": ",".join(str(g) for g in genre_ids),
-            "with_origin_country": _WESTERN_COUNTRIES,
+            "with_origin_country": country,
             "vote_count.gte": _VOTE_FLOOR,
             "include_adult": "false",
             "sort_by": "popularity.desc",
