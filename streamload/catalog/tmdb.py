@@ -46,6 +46,12 @@ class TmdbItem:
     runtime_minutes: Optional[int] = None
     seasons_count: Optional[int] = None
     genres: list[str] = field(default_factory=list)
+    # Scorer fields (sub-plan 9 playability ranking) — populated from the raw
+    # TMDB payload so the heuristic needs no extra round-trips.
+    original_language: Optional[str] = None
+    origin_country: list[str] = field(default_factory=list)
+    vote_count: int = 0
+    popularity: float = 0.0
 
 
 @dataclass
@@ -139,6 +145,10 @@ class TmdbClient:
             rating=float(data["vote_average"]) if data.get("vote_average") is not None else None,
             runtime_minutes=data.get("runtime"),
             genres=[g["name"] for g in data.get("genres", [])] if "genres" in data else [],
+            original_language=data.get("original_language"),
+            origin_country=list(data.get("origin_country") or []),
+            vote_count=int(data.get("vote_count") or 0),
+            popularity=float(data.get("popularity") or 0.0),
         )
 
     def _parse_tv(self, data: dict) -> TmdbItem:
@@ -154,6 +164,10 @@ class TmdbClient:
             rating=float(data["vote_average"]) if data.get("vote_average") is not None else None,
             seasons_count=data.get("number_of_seasons"),
             genres=[g["name"] for g in data.get("genres", [])] if "genres" in data else [],
+            original_language=data.get("original_language"),
+            origin_country=list(data.get("origin_country") or []),
+            vote_count=int(data.get("vote_count") or 0),
+            popularity=float(data.get("popularity") or 0.0),
         )
 
     def _parse_search_or_collection_item(self, data: dict, default_type: str = "movie") -> TmdbItem:

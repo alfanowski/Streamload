@@ -38,6 +38,41 @@ async def test_popular_movies_parses_response():
 
 
 @pytest.mark.asyncio
+async def test_parse_movie_populates_scorer_fields():
+    http = MagicMock()
+    http.get = AsyncMock(return_value=_mk_resp({
+        "results": [
+            {"id": 1, "title": "Foo", "release_date": "2024-01-01",
+             "poster_path": "/p.jpg", "original_language": "en",
+             "origin_country": ["US"], "vote_count": 1200, "popularity": 88.5},
+        ]
+    }))
+    client = TmdbClient(api_key="x", http=http)
+    items = await client.popular_movies()
+    it = items[0]
+    assert it.original_language == "en"
+    assert it.origin_country == ["US"]
+    assert it.vote_count == 1200
+    assert it.popularity == 88.5
+
+
+@pytest.mark.asyncio
+async def test_parse_tv_origin_country_falls_back_to_empty():
+    http = MagicMock()
+    http.get = AsyncMock(return_value=_mk_resp({
+        "results": [
+            {"id": 2, "name": "Bar", "first_air_date": "2023-01-01",
+             "poster_path": "/q.jpg"},
+        ]
+    }))
+    client = TmdbClient(api_key="x", http=http)
+    items = await client.popular_tv()
+    assert items[0].origin_country == []
+    assert items[0].vote_count == 0
+    assert items[0].popularity == 0.0
+
+
+@pytest.mark.asyncio
 async def test_trending_includes_media_type():
     http = MagicMock()
     http.get = AsyncMock(return_value=_mk_resp({
