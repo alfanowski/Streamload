@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from streamload.api.deps import CurrentUser, SessionDep
 from streamload.catalog.ingest import ingest_single_title
+from streamload.catalog.playability import rank_by_playability
 from streamload.catalog.service import CatalogService
 from streamload.catalog.tmdb import TmdbClient, TmdbItem, _is_real_title, _parse_year
 from streamload.utils.logger import get_logger
@@ -333,6 +334,7 @@ async def rows_trending(
             limit=limit,
             start_page=page,
         )
+    items = rank_by_playability(items)
     return [_to_summary(i) for i in items]
 
 
@@ -355,6 +357,7 @@ async def rows_new_releases(
             limit=limit,
             start_page=page,
         )
+    items = rank_by_playability(items)
     return [_to_summary(i) for i in items]
 
 
@@ -364,10 +367,15 @@ async def rows_by_genre(
     genre_ids: str,
     media_type: str,
     original_language: str | None = None,
+    origin: str = "western",
     limit: int = _ROW_DEFAULT_LIMIT,
     page: int = 1,
 ) -> list[MediaSummaryResponse]:
-    """``genre_ids`` is a comma-separated list of TMDB genre IDs (e.g. ``80,53``)."""
+    """``genre_ids`` is a comma-separated list of TMDB genre IDs (e.g. ``80,53``).
+
+    ``origin`` is ``western`` (default) or ``jp``; the Anime rows pass ``jp``
+    so they surface Japanese anime instead of Western cartoons.
+    """
     _validate_media_type(media_type)
     try:
         ids = [int(g) for g in genre_ids.split(",") if g.strip()]
@@ -389,11 +397,13 @@ async def rows_by_genre(
                 genre_ids=ids,
                 media_type=media_type,
                 original_language=original_language,
+                origin=origin,
                 page=p,
             ),
             limit=limit,
             start_page=page,
         )
+    items = rank_by_playability(items, is_anime_row=(origin == "jp"))
     return [_to_summary(i) for i in items]
 
 
@@ -417,6 +427,7 @@ async def rows_top_rated(
             limit=limit,
             start_page=page,
         )
+    items = rank_by_playability(items)
     return [_to_summary(i) for i in items]
 
 

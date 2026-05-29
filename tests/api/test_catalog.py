@@ -273,7 +273,8 @@ async def test_rows_by_genre(api_client, authed, monkeypatch):
 
     captured: dict = {}
 
-    async def fake_disc(self, *, genre_ids, media_type, original_language=None, page=1):
+    async def fake_disc(self, *, genre_ids, media_type, original_language=None,
+                        origin="western", page=1):
         captured["ids"] = genre_ids
         captured["media_type"] = media_type
         captured["lang"] = original_language
@@ -350,6 +351,54 @@ async def test_rows_recommendations_endpoint(api_client, authed, monkeypatch):
     assert r.status_code == 200
     body = r.json()
     assert body[0]["title"] == "rec"
+
+
+@pytest.mark.asyncio
+async def test_rows_trending_ranks_playable_first(api_client, authed, monkeypatch):
+    monkeypatch.setenv("TMDB_API_KEY", "test-key")
+    from streamload.catalog.tmdb import TmdbItem
+
+    async def fake_week(self, *, media_type="all", page=1):
+        if page > 1:
+            return []
+        # obscure Korean first, mainstream US second — ranker must flip them.
+        return [
+            TmdbItem(tmdb_id=1, media_type="movie", title="K",
+                     origin_country=["KR"], original_language="ko",
+                     vote_count=1, popularity=0.1, year=2024,
+                     poster_url="https://i/p.jpg"),
+            TmdbItem(tmdb_id=2, media_type="movie", title="U",
+                     origin_country=["US"], original_language="en",
+                     vote_count=5000, popularity=180.0, year=2024,
+                     poster_url="https://i/p.jpg"),
+        ]
+
+    monkeypatch.setattr(
+        "streamload.api.routes.catalog.TmdbClient.trending_week", fake_week,
+    )
+    r = await api_client.get("/api/catalog/rows/trending")
+    assert r.status_code == 200
+    ids = [x["tmdb_id"] for x in r.json()]
+    assert ids == [2, 1]  # US (playable-likely) floated above KR
+
+
+@pytest.mark.asyncio
+async def test_rows_by_genre_jp_origin_forwarded(api_client, authed, monkeypatch):
+    monkeypatch.setenv("TMDB_API_KEY", "test-key")
+    captured = {}
+
+    async def fake_discover(self, *, genre_ids, media_type,
+                            original_language=None, origin="western", page=1):
+        captured["origin"] = origin
+        return []
+
+    monkeypatch.setattr(
+        "streamload.api.routes.catalog.TmdbClient.discover_by_genre", fake_discover,
+    )
+    r = await api_client.get(
+        "/api/catalog/rows/by-genre?genre_ids=16&media_type=tv&origin=jp")
+    assert r.status_code == 200
+    assert captured["origin"] == "jp"
 
 
 @pytest.mark.asyncio
