@@ -466,6 +466,16 @@ class TmdbClient:
                     continue
                 people.append(person)
 
+        # Drop "people" whose name is literally a title in the results — that's
+        # a franchise mis-tagged as a person (e.g. searching "avengers" returns
+        # a bogus person "The Avengers"). Real actors never collide with a
+        # title name here.
+        _title_names = {(t.title or "").strip().lower() for t in titles}
+        people = [
+            p for p in people
+            if (p.name or "").strip().lower() not in _title_names
+        ]
+
         # Netflix-style relevance: the title(s) the user actually searched for
         # come first, then by popularity — so well-known matches lead and the
         # obscure long-tail TMDB also-rans sink to the bottom instead of

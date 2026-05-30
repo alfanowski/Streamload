@@ -175,6 +175,31 @@ async def test_search_multi_all_keeps_people_without_photo_drops_noise():
 
 
 @pytest.mark.asyncio
+async def test_search_multi_all_drops_person_named_like_a_title():
+    # A franchise mis-tagged as a person ("The Avengers") must NOT show up in
+    # people when a title with the same name is in the results; real actors do.
+    http = MagicMock()
+    http.get = AsyncMock(return_value=_mk_resp({
+        "results": [
+            {"id": 10, "media_type": "movie", "title": "The Avengers",
+             "release_date": "2012-05-04", "vote_count": 5000,
+             "popularity": 80.0},
+            {"id": 11, "media_type": "person", "name": "The Avengers",
+             "known_for_department": "Acting", "profile_path": "/a.jpg",
+             "known_for": [{"media_type": "movie", "title": "Whatever"}]},
+            {"id": 12, "media_type": "person", "name": "Robert Downey Jr.",
+             "known_for_department": "Acting", "profile_path": "/r.jpg",
+             "known_for": [{"media_type": "movie", "title": "Iron Man"}]},
+        ]
+    }))
+    client = TmdbClient(api_key="x", http=http)
+    bundle = await client.search_multi_all("avengers")
+    people_ids = {p.tmdb_id for p in bundle["people"]}
+    assert 11 not in people_ids  # franchise mis-tagged as a person
+    assert 12 in people_ids      # real actor kept
+
+
+@pytest.mark.asyncio
 async def test_image_url_uses_w500_default():
     http = MagicMock()
     client = TmdbClient(api_key="x", http=http)
