@@ -24,10 +24,13 @@ echo "[entrypoint] Running migrations (alembic upgrade head)..."
 alembic upgrade head
 
 echo "[entrypoint] Starting Streamload API (granian, workers=${GRANIAN_WORKERS:-1})..."
+# NOTE: no `--loop uvloop`. uvloop ships no cp314 wheel, so on the python:3.14
+# base image granian crashes at worker spawn ("'uvloop' implementation not
+# available"). Granian's default loop (asyncio) is correct here; the small
+# throughput edge from uvloop is irrelevant for ~10 users.
 exec granian \
     --interface asgi \
     --host 0.0.0.0 \
     --port 8000 \
     --workers "${GRANIAN_WORKERS:-1}" \
-    --loop uvloop \
     streamload.api.app:app
