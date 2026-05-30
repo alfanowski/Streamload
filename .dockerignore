@@ -1,48 +1,77 @@
+# Keep the build context (and image) lean. The Dockerfile only needs:
+#   requirements.txt, streamload/, migrations/, alembic.ini, streamload.py,
+#   deploy/entrypoint.sh
+
 # VCS
 .git/
 .gitignore
 .gitattributes
+.github/
 
-# IDE
+# IDE / editor
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
 
-# Python
+# Python caches / build artifacts
 __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.egg-info/
+.eggs/
+*.egg
+dist/
+build/
+*.so
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
-*.egg-info/
+htmlcov/
+.coverage
+.coverage.*
+
+# Virtualenvs
 venv/
 .venv/
+ENV/
+env/
 
-# Node
-node_modules/
-
-# Tests
-tests/
-**/test_*.py
-.coverage
-
-# Local data
-data/
-Video/
-streamload.log*
-.superpowers/
-
-# Secrets
+# Secrets / local env (never bake into an image)
 .env
+.env.*
 secret/
 config.json
 login.json
+domains.json
+domains.json.sig
 
-# Documentation
+# Tests & docs (not needed at runtime)
+tests/
+**/test_*.py
 docs/
 README.md
 *.md
 
-# CI artifacts
-.github/
+# Local data / media / logs
+data/
+Video/
+*.mkv
+*.mp4
+*.db
+*.log
+streamload.log*
+
+# Deploy assets that belong on the host, NOT in the image
+# (entrypoint.sh is the exception — it is copied in, so do NOT ignore it)
+docker-compose.yml
+Caddyfile
+deploy/backup.sh
+
+# Agent / OS cruft
+.superpowers/
+.claude/
+.DS_Store
+Thumbs.db
