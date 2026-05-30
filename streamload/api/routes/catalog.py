@@ -77,6 +77,11 @@ class VideoResponse(BaseModel):
     name: str | None = None
 
 
+class LogoResponse(BaseModel):
+    """The title's official logo (typographic wordmark), or null."""
+    logo_url: str | None = None
+
+
 class CreditPersonResponse(BaseModel):
     """Subset of TMDB credit-person fields used by the title page sidebar."""
     id: int
@@ -205,6 +210,35 @@ async def get_item_videos(
         for v in results
         if v.get("site") == "YouTube" and v.get("key")
     ]
+
+
+@router.get("/{tmdb_id}/logo", response_model=LogoResponse)
+async def get_item_logo(
+    tmdb_id: int,
+    user: CurrentUser,
+    media_type: str,
+) -> LogoResponse:
+    """Best official title-logo (transparent PNG) for a movie/tv, or null.
+
+    The home hero renders this wordmark instead of app-typeset text when it
+    exists, falling back to text otherwise. Never throws on missing art — a
+    null ``logo_url`` simply means "use the text fallback".
+    """
+    if media_type not in ("movie", "tv"):
+        raise HTTPException(status.HTTP_400_BAD_REQUEST, "media_type must be 'movie' or 'tv'")
+    api_key = os.environ.get("TMDB_API_KEY", "")
+    if not api_key:
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "TMDB not configured")
+    async with httpx.AsyncClient(timeout=15) as http:
+        tmdb = TmdbClient(api_key=api_key, http=http)
+        try:
+            url = await tmdb.get_logo_url(tmdb_id, media_type=media_type)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return LogoResponse(logo_url=None)
+            log.warning("TMDB logo %s/%s error: %s", media_type, tmdb_id, e)
+            return LogoResponse(logo_url=None)
+    return LogoResponse(logo_url=url)
 
 
 # ──────────────────────────────────────────────────────────────────────────

@@ -354,6 +354,37 @@ class TmdbClient:
         )
         return list(data.get("results", []))
 
+    async def get_logo_url(self, tmdb_id: int, *, media_type: str) -> Optional[str]:
+        """Best official title-logo (transparent PNG) for a movie/tv, or None.
+
+        TMDB ``/images`` filters logos to the request ``language`` *unless*
+        ``include_image_language`` lists them explicitly, so we ask for
+        Italian, English and language-neutral logos in one call. Preference
+        order: Italian → English → language-neutral → first available. Logos
+        are the studio's typographic title treatment — used by the hero so a
+        film shows its real wordmark instead of app-rendered text.
+        """
+        data = await self._get(
+            f"/{media_type}/{tmdb_id}/images",
+            {"include_image_language": "it,en,null", "language": "it"},
+        )
+        logos = data.get("logos") or []
+        if not logos:
+            return None
+
+        def _rank(logo: dict) -> int:
+            iso = logo.get("iso_639_1")
+            if iso == "it":
+                return 0
+            if iso == "en":
+                return 1
+            if iso in (None, ""):
+                return 2
+            return 3
+
+        best = min(logos, key=_rank)
+        return self.image_url(best.get("file_path"), size="w500")
+
     async def get_credits(self, tmdb_id: int, *, media_type: str) -> dict:
         """Raw credits payload (``cast`` + ``crew`` arrays) for movie or tv.
 
