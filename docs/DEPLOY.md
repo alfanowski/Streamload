@@ -9,12 +9,12 @@ The stack is three Docker containers managed by `docker compose`:
 |---------|-------|------|
 | `db`    | `postgres:16-alpine` | Postgres, internal-only, named volume `pgdata` |
 | `api`   | `ghcr.io/alfanowski/streamload-api:latest` | the FastAPI backend (granian) |
-| `caddy` | `caddy:2-alpine` | reverse proxy + automatic HTTPS for `api.capytal.tech` |
+| `caddy` | `caddy:2-alpine` | reverse proxy + automatic HTTPS for `api.streamload.capytal.tech` |
 
 The image is built and pushed to GHCR by GitHub Actions on every push to `main`
 (`.github/workflows/deploy.yml`). The VPS **pulls** the image — it never builds.
 
-Domain: **`api.capytal.tech`** (subdomain of `capytal.tech`, DNS controlled by
+Domain: **`api.streamload.capytal.tech`** (subdomain of `capytal.tech`, DNS controlled by
 the operator).
 
 > The client web frontend is a SEPARATE deploy and is intentionally NOT part of
@@ -41,14 +41,14 @@ the operator).
 In your DNS provider for `capytal.tech`, add an **A record**:
 
 ```
-api.capytal.tech   A   <DROPLET_PUBLIC_IP>   (TTL 300)
+api.streamload.capytal.tech   A   <DROPLET_PUBLIC_IP>   (TTL 300)
 ```
 
 Wait for propagation before bringing up Caddy — Let's Encrypt validation fails if
-`api.capytal.tech` doesn't resolve to this droplet yet. Check:
+`api.streamload.capytal.tech` doesn't resolve to this droplet yet. Check:
 
 ```bash
-dig +short api.capytal.tech    # must print the droplet IP
+dig +short api.streamload.capytal.tech    # must print the droplet IP
 ```
 
 Propagation is usually minutes, occasionally up to an hour.
@@ -181,7 +181,7 @@ docker compose logs -f api        # look for "alembic upgrade head" then granian
 # TLS + app reachable from the internet (Caddy will have issued a cert).
 # NOTE: this app mounts everything under /api — health is /api/health and the
 # OpenAPI schema is /api/openapi.json (NOT /openapi.json).
-curl -fsS https://api.capytal.tech/api/health; echo
+curl -fsS https://api.streamload.capytal.tech/api/health; echo
 ```
 
 A `200` `{"status":"ok",...}` over **https** confirms: image pulled, migrations
@@ -190,7 +190,7 @@ applied, granian serving, Caddy proxying, and TLS issued.
 ### First admin login check
 
 ```bash
-curl -i -X POST https://api.capytal.tech/api/auth/login \
+curl -i -X POST https://api.streamload.capytal.tech/api/auth/login \
   -H 'Content-Type: application/json' \
   -d '{"username":"<STREAMLOAD_ADMIN_USERNAME>","password":"<STREAMLOAD_ADMIN_PASSWORD>"}'
 ```
@@ -270,8 +270,8 @@ up -d`. Remove it (or set back to `latest`) once the issue is fixed.
 ## 11. Troubleshooting
 
 ### TLS certificate not issued / `curl` fails on https  ← MOST LIKELY FIRST-DEPLOY ISSUE
-- **Top cause:** DNS for `api.capytal.tech` isn't pointing at the droplet yet, or
-  hasn't propagated. `dig +short api.capytal.tech` MUST return the droplet IP.
+- **Top cause:** DNS for `api.streamload.capytal.tech` isn't pointing at the droplet yet, or
+  hasn't propagated. `dig +short api.streamload.capytal.tech` MUST return the droplet IP.
   Let's Encrypt validates over HTTP-01 on port 80.
 - Ensure ports **80 and 443** are open in `ufw` (`ufw status`) AND not blocked by
   a DigitalOcean cloud firewall.

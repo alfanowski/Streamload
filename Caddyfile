@@ -1,14 +1,14 @@
 # Caddy reverse proxy for the Streamload v3 backend.
 #
 # Caddy automatically provisions and renews a Let's Encrypt TLS certificate for
-# api.capytal.tech as long as:
-#   - the DNS A record api.capytal.tech points at this droplet's public IP, and
+# api.streamload.capytal.tech as long as:
+#   - the DNS A record api.streamload.capytal.tech points at this droplet's public IP, and
 #   - ports 80 and 443 are reachable from the internet (open in ufw + droplet).
 #
 # Because TLS terminates here, requests reach the app over https, which is what
 # makes the app set its session cookies with Secure=True in production.
 
-api.capytal.tech {
+api.streamload.capytal.tech {
 	# Proxy everything to the api container on the compose network.
 	reverse_proxy api:8000 {
 		# Give long-running ingest / TMDB calls room to breathe.

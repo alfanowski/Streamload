@@ -3,7 +3,7 @@
 # Three services:
 #   db    -> Postgres 16 (alpine), internal-only, named volume for data
 #   api   -> this backend, pulled from GHCR, reachable only on the compose net
-#   caddy -> reverse proxy + automatic HTTPS (Let's Encrypt) for api.capytal.tech
+#   caddy -> reverse proxy + automatic HTTPS (Let's Encrypt) for api.streamload.capytal.tech
 #
 # Secrets / config come from .env.prod (created on the VPS, NEVER committed).
 # See .env.prod.example for the full list of required variables.

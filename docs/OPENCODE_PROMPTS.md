@@ -13,8 +13,8 @@ Substitute the placeholders before pasting:
 
 > The full manual runbook these mirror is in [`DEPLOY.md`](./DEPLOY.md).
 > Prerequisite (do this yourself, not via opencode): create the DNS A record
-> `api.capytal.tech -> <DROPLET_PUBLIC_IP>` and confirm
-> `dig +short api.capytal.tech` returns the droplet IP before running Prompt 4.
+> `api.streamload.capytal.tech -> <DROPLET_PUBLIC_IP>` and confirm
+> `dig +short api.streamload.capytal.tech` returns the droplet IP before running Prompt 4.
 
 ---
 
@@ -86,17 +86,17 @@ Do not commit anything. Report the generated passwords to me securely, once.
 ## Prompt 4 — Bring the stack up and verify TLS
 
 ```
-Work in /opt/streamload/Streamload as the `deploy` user. Bring up the three-service stack and verify it end to end. The DNS A record for api.capytal.tech already points at this droplet.
+Work in /opt/streamload/Streamload as the `deploy` user. Bring up the three-service stack and verify it end to end. The DNS A record for api.streamload.capytal.tech already points at this droplet.
 
 1. `docker compose pull` (pulls postgres:16-alpine, caddy:2-alpine, and ghcr.io/alfanowski/streamload-api:latest).
 2. `docker compose up -d`.
 3. `docker compose ps` — confirm db is "healthy" and api + caddy are "running".
 4. `docker compose logs api` — confirm "alembic upgrade head" ran, then granian started listening on 0.0.0.0:8000.
 5. Wait up to ~2 minutes for Caddy to obtain a Let's Encrypt cert, then run:
-   `curl -fsS https://api.capytal.tech/api/health`
+   `curl -fsS https://api.streamload.capytal.tech/api/health`
    (IMPORTANT: this app mounts routes under /api — the health path is /api/health, not /health.)
    A 200 JSON response over HTTPS means success.
-6. If the https curl fails: check `docker compose logs caddy` for ACME errors, confirm `dig +short api.capytal.tech` returns this droplet's IP, and confirm `ufw status` shows 80 and 443 allowed. Report what you find.
+6. If the https curl fails: check `docker compose logs caddy` for ACME errors, confirm `dig +short api.streamload.capytal.tech` returns this droplet's IP, and confirm `ufw status` shows 80 and 443 allowed. Report what you find.
 
 Report `docker compose ps`, the relevant api log lines, and the curl result.
 ```
