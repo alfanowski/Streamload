@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from streamload.catalog.tmdb import TmdbClient, TmdbItem
+from streamload.catalog.tmdb import TmdbClient, TmdbItem, _rank_titles
 
 
 def _mk_resp(json_payload: dict, status: int = 200):
@@ -398,3 +398,31 @@ async def test_get_person_credits_returns_raw_dict():
     assert data["crew"][0]["name"] == "Bar"
     called_url = http.get.call_args[0][0]
     assert called_url.endswith("/person/287/combined_credits")
+
+
+def test_rank_titles_orders_by_relevance_and_gates_noise():
+    items = [
+        TmdbItem(tmdb_id=1, media_type="movie", title="Iron Man",
+                 poster_url="/p.jpg", popularity=80.0, vote_count=20000, rating=7.9),
+        # Weak "contains" match with almost no audience → gated out.
+        TmdbItem(tmdb_id=2, media_type="movie", title="Lego Iron Man",
+                 poster_url="/p.jpg", popularity=1.0, vote_count=5, rating=6.0),
+        TmdbItem(tmdb_id=3, media_type="movie", title="Iron Man 3",
+                 poster_url="/p.jpg", popularity=60.0, vote_count=18000, rating=7.0),
+        # No poster → dropped.
+        TmdbItem(tmdb_id=4, media_type="movie", title="Iron Man Noir",
+                 poster_url=None, popularity=5.0, vote_count=100, rating=6.0),
+    ]
+    ranked = _rank_titles(items, "iron man")
+    ids = [it.tmdb_id for it in ranked]
+    assert ids[0] == 1          # exact match leads
+    assert 2 not in ids         # weak match, <50 votes → gated
+    assert 4 not in ids         # no poster → gated
+    assert 3 in ids
+
+
+def test_correct_fixes_a_typo_against_the_corpus():
+    corpus = ["Friends", "Breaking Bad", "The Office"]
+    assert TmdbClient._correct("frinds", corpus) == "Friends"
+    assert TmdbClient._correct("breakin bad", corpus) == "Breaking Bad"
+    assert TmdbClient._correct("zzzzqqq", corpus) is None

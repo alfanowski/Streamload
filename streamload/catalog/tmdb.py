@@ -9,12 +9,20 @@ We don't add explicit throttling.
 """
 from __future__ import annotations
 
+import difflib
+import time
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from streamload.utils.logger import get_logger
 
 log = get_logger(__name__)
+
+# In-process cache of popular/top-rated title strings, used to spell-correct
+# typo'd queries (e.g. "frinds" → "Friends"). Refreshed every few hours.
+_CORPUS_TITLES: list[str] = []
+_CORPUS_TS: float = 0.0
+_CORPUS_TTL = 6 * 3600
 
 _BASE = "https://api.themoviedb.org/3"
 _IMG_BASE = "https://image.tmdb.org/t/p"
@@ -106,6 +114,68 @@ def _quality_filter(items: list["TmdbItem"]) -> list["TmdbItem"]:
     so we filter them out at the API edge.
     """
     return [it for it in items if it.poster_url and _is_real_title(it.title)]
+
+
+def _rank_titles(items: list["TmdbItem"], query: str) -> list["TmdbItem"]:
+    """Netflix-style relevance ranking + quality gate for a title set.
+
+    Score = title match (exact > prefix > contains > all-words > any-word)
+    + popularity + confidence-weighted rating + votes. The gate drops
+    posterless / spam / obscure noise (comics, Lego, "Elon Musk: Real Life
+    Iron Man") — weak matches must have a real audience to make the cut.
+    Shared by /search and the smart-search fallbacks.
+    """
+    ql = (query or "").strip().lower()
+    qtokens = {w for w in ql.split() if w}
+
+    def _match(it: "TmdbItem") -> float:
+        t = (it.title or "").lower()
+        if not ql:
+            return 0.0
+        if t == ql:
+            return 1_000_000.0
+        if t.startswith(ql):
+            return 400_000.0
+        if ql in t:
+            return 150_000.0
+        tw = set(t.split())
+        if qtokens and qtokens.issubset(tw):
+            return 90_000.0
+        if qtokens & tw:
+            return 25_000.0
+        return 0.0
+
+    def _score(it: "TmdbItem") -> float:
+        rating = float(it.rating or 0.0)
+        votes = int(it.vote_count or 0)
+        quality = rating * min(votes, 1000) / 1000.0
+        return (
+            _match(it)
+            + float(it.popularity or 0.0) * 60.0
+            + quality * 4_000.0
+            + min(votes, 20_000) * 0.15
+        )
+
+    def _keep(it: "TmdbItem") -> bool:
+        if not it.poster_url or not _is_real_title(it.title):
+            return False
+        t = (it.title or "").lower()
+        if t == ql or t.startswith(ql):
+            return True
+        return int(it.vote_count or 0) >= 50
+
+    kept = [it for it in items if _keep(it)]
+    kept.sort(key=_score, reverse=True)
+    return kept
+
+
+def _name_tokens(name: str) -> list[str]:
+    """Significant tokens of a person's name (drops Jr./Sr./III suffixes)."""
+    suffixes = {"jr", "jr.", "sr", "sr.", "ii", "iii", "iv"}
+    return [
+        w for w in (name or "").lower().split()
+        if w and w not in suffixes
+    ]
 
 
 class TmdbClient:
@@ -476,61 +546,118 @@ class TmdbClient:
             if (p.name or "").strip().lower() not in _title_names
         ]
 
-        # ── Relevance algorithm ───────────────────────────────────────────
-        # A serious, Netflix-style ranking from the strong signals TMDB gives
-        # us at search time (it does NOT return genres here). Three factors:
-        #   1. title match  — exact > prefix > contains > all-words > any-word
-        #   2. popularity   — separates the real films from the long tail
-        #   3. quality      — vote_average (rating) gated by vote_count, so a
-        #                     1-vote 10/10 never beats a 7.8 with 50k votes
-        # …plus a QUALITY GATE that drops posterless / spam / obscure noise
-        # (the comics, Lego sets and "Elon Musk: Real Life Iron Man" clutter).
+        return {"titles": _rank_titles(titles, query), "people": people}
+
+    async def search_person(self, query: str, *, page: int = 1) -> list[TmdbPerson]:
+        """TMDB ``/search/person`` — people whose name matches the query."""
+        data = await self._get("/search/person", {"query": query, "page": page})
+        return [self._parse_person(x) for x in data.get("results", [])]
+
+    async def person_credit_items(self, person_id: int) -> list[TmdbItem]:
+        """A person's combined filmography as parsed [TmdbItem]s (dedup by id)."""
+        data = await self.get_person_credits(person_id)
+        out: dict[tuple[int, str], TmdbItem] = {}
+        for entry in list(data.get("cast", [])) + list(data.get("crew", [])):
+            mt = entry.get("media_type")
+            if mt not in ("movie", "tv"):
+                continue
+            it = self._parse_search_or_collection_item(entry, default_type=mt)
+            out.setdefault((it.tmdb_id, it.media_type), it)
+        return list(out.values())
+
+    async def _corpus_titles(self) -> list[str]:
+        """Cached set of popular + top-rated movie/tv titles for spell-check."""
+        global _CORPUS_TITLES, _CORPUS_TS
+        now = time.time()
+        if _CORPUS_TITLES and (now - _CORPUS_TS) < _CORPUS_TTL:
+            return _CORPUS_TITLES
+        titles: set[str] = set()
+        try:
+            for path in (
+                "/movie/top_rated", "/tv/top_rated",
+                "/movie/popular", "/tv/popular",
+            ):
+                for pg in (1, 2, 3):
+                    data = await self._get(path, {"page": pg})
+                    for x in data.get("results", []):
+                        name = x.get("title") or x.get("name")
+                        if name:
+                            titles.add(name)
+        except Exception:
+            log.warning("corpus fetch failed", exc_info=True)
+        if titles:
+            _CORPUS_TITLES = sorted(titles)
+            _CORPUS_TS = now
+        return _CORPUS_TITLES
+
+    @staticmethod
+    def _correct(query: str, corpus: list[str]) -> Optional[str]:
+        """Closest popular title to a typo'd query (difflib), else None."""
         ql = query.strip().lower()
-        qtokens = {w for w in ql.split() if w}
+        if not ql or not corpus:
+            return None
+        lowered = [c.lower() for c in corpus]
+        matches = difflib.get_close_matches(ql, lowered, n=1, cutoff=0.72)
+        if not matches:
+            return None
+        hit = matches[0]
+        for c in corpus:
+            if c.lower() == hit:
+                return c
+        return None
 
-        def _match(it: TmdbItem) -> float:
-            t = (it.title or "").lower()
-            if not ql:
-                return 0.0
-            if t == ql:
-                return 1_000_000.0
-            if t.startswith(ql):
-                return 400_000.0
-            if ql in t:
-                return 150_000.0
-            tw = set(t.split())
-            if qtokens and qtokens.issubset(tw):
-                return 90_000.0
-            if qtokens & tw:
-                return 25_000.0
-            return 0.0
+    async def _combined_search(self, tokens: list[str]) -> Optional[dict]:
+        """"Title + actor" queries: split into a person name (tail) + a title
+        (head), e.g. "iron man robert downey" → Robert Downey Jr. + his Iron
+        Man films. Returns the smart-search dict, or None if no actor found."""
+        for cut in range(len(tokens) - 1, 0, -1):
+            person_part = " ".join(tokens[cut:])
+            title_part = " ".join(tokens[:cut])
+            chunk = set(_name_tokens(person_part))
+            actor = None
+            for p in (await self.search_person(person_part))[:3]:
+                nt = _name_tokens(p.name)
+                if nt and nt[0] in chunk and nt[-1] in chunk:
+                    actor = p
+                    break
+            if actor is None:
+                continue
+            credits = await self.person_credit_items(actor.tmdb_id)
+            tql = title_part.strip().lower()
+            ttoks = {w for w in tql.split() if w}
 
-        def _quality(it: TmdbItem) -> float:
-            rating = float(it.rating or 0.0)
-            votes = int(it.vote_count or 0)
-            # Confidence-weighted rating: a film needs an audience for its
-            # score to count fully (caps the weight at ~1k votes).
-            return rating * min(votes, 1000) / 1000.0
+            def _has(it: TmdbItem, require_all: bool) -> bool:
+                t = (it.title or "").lower()
+                tw = set(t.split())
+                if require_all:
+                    return ttoks.issubset(tw) or (tql and tql in t)
+                return bool(ttoks & tw)
 
-        def _score(it: TmdbItem) -> float:
-            return (
-                _match(it)
-                + float(it.popularity or 0.0) * 60.0
-                + _quality(it) * 4_000.0
-                + min(int(it.vote_count or 0), 20_000) * 0.15
-            )
+            filtered = [c for c in credits if _has(c, True)]
+            if not filtered:
+                filtered = [c for c in credits if _has(c, False)]
+            ranked = _rank_titles(filtered or credits, title_part)
+            return {"titles": ranked, "people": [actor], "corrected": None}
+        return None
 
-        def _keep(it: TmdbItem) -> bool:
-            # Always need real art + a real title.
-            if not it.poster_url or not _is_real_title(it.title):
-                return False
-            t = (it.title or "").lower()
-            # Exact / prefix matches are the films the user means — always keep.
-            if t == ql or t.startswith(ql):
-                return True
-            # Weaker matches must have a real audience to make the cut.
-            return int(it.vote_count or 0) >= 50
+    async def smart_search(self, query: str, *, page: int = 1) -> dict:
+        """User-proof search: plain match → "title + actor" split → typo
+        correction. Returns ``{titles, people, corrected}``."""
+        bundle = await self.search_multi_all(query, page=page)
+        if bundle["titles"] or bundle["people"]:
+            return {**bundle, "corrected": None}
 
-        titles = [it for it in titles if _keep(it)]
-        titles.sort(key=_score, reverse=True)
-        return {"titles": titles, "people": people}
+        tokens = [t for t in query.split() if t]
+        if len(tokens) >= 2:
+            combo = await self._combined_search(tokens)
+            if combo and (combo["titles"] or combo["people"]):
+                return combo
+
+        corpus = await self._corpus_titles()
+        corrected = self._correct(query, corpus)
+        if corrected and corrected.lower() != query.strip().lower():
+            b2 = await self.search_multi_all(corrected, page=page)
+            if b2["titles"] or b2["people"]:
+                return {**b2, "corrected": corrected}
+
+        return {"titles": [], "people": [], "corrected": None}

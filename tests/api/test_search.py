@@ -24,8 +24,8 @@ async def test_search_returns_tmdb_results(api_client, authed):
     ]
     with patch("streamload.api.routes.search._build_tmdb_client") as mk:
         client = mk.return_value
-        client.search_multi_all = AsyncMock(
-            return_value={"titles": fake_titles, "people": []})
+        client.smart_search = AsyncMock(
+            return_value={"titles": fake_titles, "people": [], "corrected": None})
         r = await api_client.get("/api/search", params={"q": "foo"})
     assert r.status_code == 200
     body = r.json()
@@ -45,8 +45,8 @@ async def test_search_returns_people(api_client, authed):
     ]
     with patch("streamload.api.routes.search._build_tmdb_client") as mk:
         client = mk.return_value
-        client.search_multi_all = AsyncMock(
-            return_value={"titles": [], "people": fake_people})
+        client.smart_search = AsyncMock(
+            return_value={"titles": [], "people": fake_people, "corrected": None})
         r = await api_client.get("/api/search", params={"q": "brad pitt"})
     assert r.status_code == 200
     body = r.json()

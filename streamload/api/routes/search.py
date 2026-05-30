@@ -39,6 +39,9 @@ class SearchResponse(BaseModel):
     query: str
     results: list[SearchResult]
     people: list[SearchPerson]
+    # When the query was typo-corrected (e.g. "frinds" → "Friends"), the term
+    # actually searched. Null when the original query matched directly.
+    corrected: str | None = None
 
 
 def _build_tmdb_client(http: httpx.AsyncClient) -> TmdbClient:
@@ -63,12 +66,20 @@ async def search(
     result_count = 0
     items = []
     people = []
+    corrected = None
     try:
         async with httpx.AsyncClient(timeout=15) as http:
             client = _build_tmdb_client(http)
-            bundle = await client.search_multi_all(q, page=page)
+            # Page 1 runs the full user-proof pipeline (plain → title+actor
+            # split → typo correction); later pages just paginate the plain
+            # match (the fallbacks have no meaningful pagination).
+            if page == 1:
+                bundle = await client.smart_search(q, page=page)
+            else:
+                bundle = await client.search_multi_all(q, page=page)
         items = bundle["titles"]
         people = bundle["people"]
+        corrected = bundle.get("corrected")
         result_count = len(items) + len(people)
     except Exception:
         items = []
@@ -82,6 +93,7 @@ async def search(
 
     return SearchResponse(
         query=q,
+        corrected=corrected,
         results=[
             SearchResult(
                 tmdb_id=i.tmdb_id, media_type=i.media_type,
