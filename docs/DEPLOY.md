@@ -11,8 +11,23 @@ The stack is three Docker containers managed by `docker compose`:
 | `api`   | `ghcr.io/alfanowski/streamload-api:latest` | the FastAPI backend (granian) |
 | `caddy` | `caddy:2-alpine` | reverse proxy + automatic HTTPS for `api.streamload.capytal.tech` |
 
-The image is built and pushed to GHCR by GitHub Actions on every push to `main`
-(`.github/workflows/deploy.yml`). The VPS **pulls** the image — it never builds.
+The image is built and pushed to GHCR by GitHub Actions **only when you push a
+SemVer tag** (e.g. `v0.0.1`) — not on every commit to `main`
+(`.github/workflows/deploy.yml`). Cutting a tag is the explicit "ship this"
+signal. The VPS **pulls** the image — it never builds.
+
+To ship a change:
+
+```bash
+# from your Mac, after merging the change to main:
+git tag v0.0.1
+git push origin v0.0.1        # fires the build-and-push workflow
+```
+
+Then wait for the Action to go green, and on the box run
+`docker compose pull && docker compose up -d` (takes `:latest`), or pin the
+exact version with `API_TAG=v0.0.1 docker compose pull && API_TAG=v0.0.1
+docker compose up -d`.
 
 Domain: **`api.streamload.capytal.tech`** (subdomain of `capytal.tech`, DNS controlled by
 the operator).
