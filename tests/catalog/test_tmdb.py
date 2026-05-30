@@ -131,7 +131,8 @@ async def test_search_multi_all_parses_titles_and_people():
                  {"media_type": "tv", "id": 1, "name": "A Show"},
              ]},
             {"id": 9, "title": "A Movie", "release_date": "2020-01-01",
-             "media_type": "movie", "poster_path": "/m.jpg"},
+             "media_type": "movie", "poster_path": "/m.jpg",
+             "vote_count": 100, "vote_average": 7.0},
         ]
     }))
     client = TmdbClient(api_key="x", http=http)

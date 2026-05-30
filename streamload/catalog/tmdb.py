@@ -476,26 +476,61 @@ class TmdbClient:
             if (p.name or "").strip().lower() not in _title_names
         ]
 
-        # Netflix-style relevance: the title(s) the user actually searched for
-        # come first, then by popularity — so well-known matches lead and the
-        # obscure long-tail TMDB also-rans sink to the bottom instead of
-        # flooding the top.
+        # ── Relevance algorithm ───────────────────────────────────────────
+        # A serious, Netflix-style ranking from the strong signals TMDB gives
+        # us at search time (it does NOT return genres here). Three factors:
+        #   1. title match  — exact > prefix > contains > all-words > any-word
+        #   2. popularity   — separates the real films from the long tail
+        #   3. quality      — vote_average (rating) gated by vote_count, so a
+        #                     1-vote 10/10 never beats a 7.8 with 50k votes
+        # …plus a QUALITY GATE that drops posterless / spam / obscure noise
+        # (the comics, Lego sets and "Elon Musk: Real Life Iron Man" clutter).
         ql = query.strip().lower()
+        qtokens = {w for w in ql.split() if w}
 
-        def _relevance(it: TmdbItem) -> float:
+        def _match(it: TmdbItem) -> float:
             t = (it.title or "").lower()
-            score = float(it.popularity)
+            if not ql:
+                return 0.0
             if t == ql:
-                score += 100_000
-            elif t.startswith(ql):
-                score += 50_000
-            elif ql and ql in t:
-                score += 20_000
-            elif ql and (set(ql.split()) & set(t.split())):
-                score += 5_000
-            # A small nudge for titles with real audiences over no-vote noise.
-            score += min(it.vote_count, 10_000) * 0.1
-            return score
+                return 1_000_000.0
+            if t.startswith(ql):
+                return 400_000.0
+            if ql in t:
+                return 150_000.0
+            tw = set(t.split())
+            if qtokens and qtokens.issubset(tw):
+                return 90_000.0
+            if qtokens & tw:
+                return 25_000.0
+            return 0.0
 
-        titles.sort(key=_relevance, reverse=True)
+        def _quality(it: TmdbItem) -> float:
+            rating = float(it.rating or 0.0)
+            votes = int(it.vote_count or 0)
+            # Confidence-weighted rating: a film needs an audience for its
+            # score to count fully (caps the weight at ~1k votes).
+            return rating * min(votes, 1000) / 1000.0
+
+        def _score(it: TmdbItem) -> float:
+            return (
+                _match(it)
+                + float(it.popularity or 0.0) * 60.0
+                + _quality(it) * 4_000.0
+                + min(int(it.vote_count or 0), 20_000) * 0.15
+            )
+
+        def _keep(it: TmdbItem) -> bool:
+            # Always need real art + a real title.
+            if not it.poster_url or not _is_real_title(it.title):
+                return False
+            t = (it.title or "").lower()
+            # Exact / prefix matches are the films the user means — always keep.
+            if t == ql or t.startswith(ql):
+                return True
+            # Weaker matches must have a real audience to make the cut.
+            return int(it.vote_count or 0) >= 50
+
+        titles = [it for it in titles if _keep(it)]
+        titles.sort(key=_score, reverse=True)
         return {"titles": titles, "people": people}

@@ -690,8 +690,14 @@ async def get_person_credits(
             backdrop_url=backdrop_url,
             character=raw.get("character") if bundle["from_cast"] else None,
         )
+        # Sort a person's filmography by RATING (vote_average), but gate on
+        # vote_count so a 10/10 with 3 votes can't top an acclaimed classic;
+        # popularity is the tiebreak. Best, most-loved work surfaces first.
+        rating = float(raw.get("vote_average") or 0.0)
+        votes = int(raw.get("vote_count") or 0)
         popularity = float(raw.get("popularity") or 0.0)
-        items.append((popularity, item))
+        rating_score = rating if votes >= 50 else rating * (votes / 50.0)
+        items.append(((rating_score, popularity), item))
 
     items.sort(key=lambda pair: pair[0], reverse=True)
-    return [item for _pop, item in items]
+    return [item for _key, item in items]
