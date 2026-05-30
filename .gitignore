@@ -8,6 +8,10 @@ build/
 .eggs/
 *.so
 .env
+.env.prod
+.env.*.local
+# Keep the prod env TEMPLATE tracked (real .env.prod stays ignored above)
+!.env.prod.example
 .venv/
 venv/
 ENV/

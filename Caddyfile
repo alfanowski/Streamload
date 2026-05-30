@@ -1,11 +1,53 @@
-:80 {
-    handle /api/* {
-        reverse_proxy streamload-api:8000
-    }
-    handle /stream/* {
-        reverse_proxy streamload-api:8000
-    }
-    handle {
-        reverse_proxy streamload-web:80
-    }
+# Caddy reverse proxy for the Streamload v3 backend.
+#
+# Caddy automatically provisions and renews a Let's Encrypt TLS certificate for
+# api.capytal.tech as long as:
+#   - the DNS A record api.capytal.tech points at this droplet's public IP, and
+#   - ports 80 and 443 are reachable from the internet (open in ufw + droplet).
+#
+# Because TLS terminates here, requests reach the app over https, which is what
+# makes the app set its session cookies with Secure=True in production.
+
+api.capytal.tech {
+	# Proxy everything to the api container on the compose network.
+	reverse_proxy api:8000 {
+		# Give long-running ingest / TMDB calls room to breathe.
+		transport http {
+			dial_timeout 10s
+			response_header_timeout 60s
+		}
+	}
+
+	# Compress responses.
+	encode zstd gzip
+
+	# Sensible security headers.
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+
+	# Logs to stdout (visible via `docker compose logs caddy`).
+	log {
+		output stdout
+		format console
+	}
 }
+
+# ---------------------------------------------------------------------------
+# OPTIONAL: serve the client web app from the same Caddy later.
+# The web frontend is a SEPARATE repo/deploy and is intentionally NOT part of
+# this backend stack. If you later co-host it, add a `web` service to
+# docker-compose.yml and uncomment a block like this:
+#
+# capytal.tech, www.capytal.tech {
+# 	encode zstd gzip
+# 	reverse_proxy web:3000          # proxy to a `web` compose service
+# 	# --- or, for a static SPA mounted into the caddy container ---
+# 	# root * /srv/web
+# 	# try_files {path} /index.html
+# 	# file_server
+# }
