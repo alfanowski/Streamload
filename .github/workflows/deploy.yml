@@ -1,18 +1,11 @@
-name: build-and-push
+name: build-and-deploy
 
-# Build the production image and push it to GHCR. Triggers ONLY on a SemVer
-# tag push (v0.0.1, v1.2.3, ...) -- not on every commit to main. Cutting a
-# release tag is the explicit "ship this" signal.
+# On a SemVer tag push (v0.0.1, v1.2.3, ...):
+#   1. build-push  — build the image and push it to GHCR
+#   2. deploy      — SSH to the VPS and roll the stack to the new tag
 #
-# This workflow does NOT deploy to the VPS. The operator pulls the new image
-# manually (see docs/DEPLOY.md / docs/OPENCODE_PROMPTS.md):
-#   API_TAG=v0.0.1 docker compose pull && API_TAG=v0.0.1 docker compose up -d
-# or just `docker compose pull && docker compose up -d` to take :latest.
-#
-# Image tags produced for tag v0.0.1: v0.0.1 / 0.0.1 / 0.0 / latest.
-#
-# workflow_dispatch is kept so you can rebuild from the Actions UI without
-# cutting a new tag.
+# Cutting a tag is the single "ship to prod" action. workflow_dispatch is kept
+# so you can re-run a build from the Actions UI (it skips deploy unless a tag).
 
 on:
   push:
@@ -64,5 +57,37 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+
+  deploy:
+    # Only deploy for real tag releases, after the image is on GHCR.
+    needs: build-push
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Deploy to VPS over SSH
+        uses: appleboy/ssh-action@v1.2.0
+        with:
+          host: ${{ secrets.VPS_HOST }}
+          username: ${{ secrets.VPS_USER }}
+          key: ${{ secrets.VPS_SSH_KEY }}
+          # The pushed tag, e.g. v0.0.3. Pin it so the VPS runs exactly the
+          # released version (not whatever :latest happens to be).
+          envs: GITHUB_REF_NAME
+          script: |
+            set -e
+            cd /opt/streamload
+            # Pin .env.prod to the freshly released tag.
+            sed -i "s/^API_TAG=.*/API_TAG=${GITHUB_REF_NAME}/" .env.prod
+            echo "[deploy] rolling to API_TAG=${GITHUB_REF_NAME}"
+            docker compose pull api
+            docker compose up -d
+            # Wait for the api container to report healthy (max ~90s).
+            for i in $(seq 1 18); do
+              status=$(docker inspect -f '{{.State.Health.Status}}' streamload-api 2>/dev/null || echo "starting")
+              echo "[deploy] api health: $status"
+              [ "$status" = "healthy" ] && break
+              sleep 5
+            done
+            docker compose ps
+            # Prune old dangling images to keep the 70GB disk tidy.
+            docker image prune -f >/dev/null 2>&1 || true
