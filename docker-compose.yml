@@ -8,8 +8,10 @@
 # Secrets / config come from .env.prod (created on the VPS, NEVER committed).
 # See .env.prod.example for the full list of required variables.
 #
-# The image is built + pushed to GHCR by .github/workflows/deploy.yml on push to
-# main. The VPS only pulls:  docker compose pull && docker compose up -d
+# The image is built + pushed to GHCR by .github/workflows/deploy.yml when a
+# SemVer tag (v0.0.1, …) is pushed. The VPS only pulls:
+#   docker compose pull && docker compose up -d            # takes :latest
+#   API_TAG=v0.0.1 docker compose pull && ... up -d        # pin a version
 
 x-restart-policy: &restart unless-stopped
 

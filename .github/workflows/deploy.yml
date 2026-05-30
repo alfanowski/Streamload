@@ -1,13 +1,25 @@
 name: build-and-push
 
-# Build the production image and push it to GHCR on every push to main (and on
-# version tags). This workflow does NOT deploy to the VPS — the operator pulls
+# Build the production image and push it to GHCR. Triggers ONLY on a SemVer
+# tag push (v0.0.1, v1.2.3, …) — not on every commit to main. Cutting a
+# release tag is the explicit "ship this" signal.
+#
+# This workflow does NOT deploy to the VPS. The operator pulls the new image
 # manually (see docs/DEPLOY.md / docs/OPENCODE_PROMPTS.md):
-#   docker compose pull && docker compose up -d
+#   API_TAG=v0.0.1 docker compose pull && API_TAG=v0.0.1 docker compose up -d
+# or just `docker compose pull && docker compose up -d` to take :latest.
+#
+# Image tags produced for tag v0.0.1:
+#   ghcr.io/alfanowski/streamload-api:v0.0.1   (exact version, the "v" form)
+#   ghcr.io/alfanowski/streamload-api:0.0.1    (bare semver)
+#   ghcr.io/alfanowski/streamload-api:0.0      (major.minor — moves with patches)
+#   ghcr.io/alfanowski/streamload-api:latest   (moves to the newest tag)
+#
+# workflow_dispatch is kept so you can rebuild from the Actions UI without
+# cutting a new tag.
 
 on:
   push:
-    branches: [main]
     tags: ['v*.*.*']
   workflow_dispatch: {}
 
@@ -40,8 +52,13 @@ jobs:
         uses: docker/metadata-action@v5
         with:
           images: ${{ env.IMAGE }}
+          # On a tag push these expand v0.0.1 → v0.0.1 / 0.0.1 / 0.0, and
+          # `latest` moves to the most recent tag. On workflow_dispatch from a
+          # branch, only the sha tag + (if default branch) latest apply.
           tags: |
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+            type=ref,event=tag
             type=sha,format=long
             type=semver,pattern={{version}}
             type=semver,pattern={{major}}.{{minor}}

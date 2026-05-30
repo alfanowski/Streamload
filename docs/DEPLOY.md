@@ -283,7 +283,6 @@ up -d`. Remove it (or set back to `latest`) once the issue is fixed.
 - The `api` service waits for `db` to be `service_healthy`, but a wrong
   `DATABASE_URL` still fails. Confirm host `db`, port `5432`, and that
   user/password/db match `POSTGRES_*`. Check `docker compose logs db`.
-- `docker compose ps` should show `db` as `healthy`.
 
 ### Migration failures on boot (`alembic upgrade head` errors)
 - Read `docker compose logs api` — the entrypoint prints the alembic step.
