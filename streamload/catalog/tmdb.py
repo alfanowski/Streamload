@@ -465,4 +465,27 @@ class TmdbClient:
                         and not person.known_for_titles):
                     continue
                 people.append(person)
+
+        # Netflix-style relevance: the title(s) the user actually searched for
+        # come first, then by popularity — so well-known matches lead and the
+        # obscure long-tail TMDB also-rans sink to the bottom instead of
+        # flooding the top.
+        ql = query.strip().lower()
+
+        def _relevance(it: TmdbItem) -> float:
+            t = (it.title or "").lower()
+            score = float(it.popularity)
+            if t == ql:
+                score += 100_000
+            elif t.startswith(ql):
+                score += 50_000
+            elif ql and ql in t:
+                score += 20_000
+            elif ql and (set(ql.split()) & set(t.split())):
+                score += 5_000
+            # A small nudge for titles with real audiences over no-vote noise.
+            score += min(it.vote_count, 10_000) * 0.1
+            return score
+
+        titles.sort(key=_relevance, reverse=True)
         return {"titles": titles, "people": people}
