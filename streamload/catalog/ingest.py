@@ -106,15 +106,37 @@ async def _ingest_tv_episodes(
     seasons_count: int,
     tmdb: TmdbClient,
 ) -> int:
-    """Pull every season's episode list from TMDB and upsert into tv_episodes."""
+    """Pull every season's episode list from TMDB and upsert into tv_episodes.
+
+    Seasons are fetched CONCURRENTLY (long-running shows like The Simpsons have
+    35+ seasons — fetching them one-by-one would blow the request timeout). DB
+    upserts then run sequentially (the session isn't concurrency-safe).
+    """
+    import asyncio
     from datetime import date as _date
 
+    total = (seasons_count or 0)
+    if total <= 0:
+        return 0
+
+    sem = asyncio.Semaphore(8)
+
+    async def _fetch(sn: int):
+        async with sem:
+            try:
+                return sn, await tmdb.get_tv_season(tmdb_id, sn)
+            except Exception:
+                log.warning(
+                    "TMDB season %s fetch failed for tmdb=%s",
+                    sn, tmdb_id, exc_info=True,
+                )
+                return sn, None
+
+    fetched = await asyncio.gather(*[_fetch(sn) for sn in range(1, total + 1)])
+
     inserted = 0
-    for season_number in range(1, (seasons_count or 0) + 1):
-        try:
-            data = await tmdb.get_tv_season(tmdb_id, season_number)
-        except Exception:
-            log.warning("TMDB season %s fetch failed for tmdb=%s", season_number, tmdb_id, exc_info=True)
+    for season_number, data in fetched:
+        if not data:
             continue
         for ep in data.get("episodes", []):
             air = ep.get("air_date")

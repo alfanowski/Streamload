@@ -39,6 +39,44 @@ async def test_episodes_empty_returns_empty_seasons(api_client: httpx.AsyncClien
 
 
 @pytest.mark.asyncio
+async def test_episodes_lazy_ingests_from_tmdb_when_missing(
+    api_client: httpx.AsyncClient, authed, monkeypatch,
+):
+    """A TV title with no episodes in the DB (e.g. The Simpsons) pulls them
+    from TMDB on demand, caches them, and returns the full season list."""
+    monkeypatch.setenv("TMDB_API_KEY", "test-key")
+    from streamload.catalog.tmdb import TmdbItem
+
+    async def fake_get_tv(self, tmdb_id):
+        return TmdbItem(
+            tmdb_id=tmdb_id, media_type="tv", title="The Simpsons",
+            seasons_count=2,
+        )
+
+    async def fake_get_tv_season(self, tmdb_id, season_number):
+        return {"episodes": [
+            {"episode_number": 1, "name": f"S{season_number}E1", "runtime": 22},
+            {"episode_number": 2, "name": f"S{season_number}E2", "runtime": 22},
+        ]}
+
+    monkeypatch.setattr(
+        "streamload.api.routes.episodes.TmdbClient.get_tv", fake_get_tv,
+    )
+    monkeypatch.setattr(
+        "streamload.api.routes.episodes.TmdbClient.get_tv_season",
+        fake_get_tv_season,
+    )
+
+    r = await api_client.get("/api/title/456/episodes")
+    assert r.status_code == 200
+    seasons = r.json()["seasons"]
+    assert len(seasons) == 2
+    assert [s["season_number"] for s in seasons] == [1, 2]
+    assert len(seasons[0]["episodes"]) == 2
+    assert seasons[0]["episodes"][0]["title"] == "S1E1"
+
+
+@pytest.mark.asyncio
 async def test_episodes_populated_returns_seasons(api_client: httpx.AsyncClient, authed_with_episodes):
     r = await api_client.get("/api/title/55/episodes")
     assert r.status_code == 200

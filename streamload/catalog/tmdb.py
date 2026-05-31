@@ -54,6 +54,9 @@ class TmdbItem:
     runtime_minutes: Optional[int] = None
     seasons_count: Optional[int] = None
     genres: list[str] = field(default_factory=list)
+    # Raw TMDB genre IDs (present on search/discover/trending list items). Used
+    # to drop talk shows / news platform-wide in _quality_filter.
+    genre_ids: list[int] = field(default_factory=list)
     # Scorer fields (sub-plan 9 playability ranking) — populated from the raw
     # TMDB payload so the heuristic needs no extra round-trips.
     original_language: Optional[str] = None
@@ -75,6 +78,10 @@ class TmdbPerson:
 # AND with no notable credits is almost always crew noise (sound assistants,
 # caterers) that TMDB indexes but the operator never wants surfaced.
 _PEOPLE_DEPARTMENTS = {"Acting", "Directing", "Writing", "Production"}
+
+# TMDB TV genre IDs the platform refuses to surface: Talk (10767), News
+# (10763). They get mis-tagged as "serie tv" and pollute search + rows.
+_EXCLUDED_TV_GENRES = {10767, 10763}
 
 
 def _parse_year(date_str: Optional[str]) -> Optional[int]:
@@ -111,9 +118,15 @@ def _quality_filter(items: list["TmdbItem"]) -> list["TmdbItem"]:
     Trending / discover endpoints occasionally return entries without art
     (community uploads pending image review) or with spam titles. Both
     render badly in the row UI (gray ciak placeholder + unreadable label)
-    so we filter them out at the API edge.
+    so we filter them out at the API edge. Talk shows / news (TV genres
+    10767 / 10763) are dropped too — the platform never wants them.
     """
-    return [it for it in items if it.poster_url and _is_real_title(it.title)]
+    return [
+        it for it in items
+        if it.poster_url
+        and _is_real_title(it.title)
+        and not (it.media_type == "tv" and set(it.genre_ids) & _EXCLUDED_TV_GENRES)
+    ]
 
 
 def _rank_titles(items: list["TmdbItem"], query: str) -> list["TmdbItem"]:
@@ -215,6 +228,7 @@ class TmdbClient:
             rating=float(data["vote_average"]) if data.get("vote_average") is not None else None,
             runtime_minutes=data.get("runtime"),
             genres=[g["name"] for g in data.get("genres", [])] if "genres" in data else [],
+            genre_ids=[int(g) for g in (data.get("genre_ids") or [])],
             original_language=data.get("original_language"),
             origin_country=list(data.get("origin_country") or []),
             vote_count=int(data.get("vote_count") or 0),
@@ -234,6 +248,7 @@ class TmdbClient:
             rating=float(data["vote_average"]) if data.get("vote_average") is not None else None,
             seasons_count=data.get("number_of_seasons"),
             genres=[g["name"] for g in data.get("genres", [])] if "genres" in data else [],
+            genre_ids=[int(g) for g in (data.get("genre_ids") or [])],
             original_language=data.get("original_language"),
             origin_country=list(data.get("origin_country") or []),
             vote_count=int(data.get("vote_count") or 0),
@@ -467,14 +482,15 @@ class TmdbClient:
     async def get_person(self, person_id: int) -> dict:
         """Raw ``/person/{id}`` payload — bio + birthday + profile path.
 
-        ``append_to_response=images`` pulls additional profile photos in
-        the same round-trip so a future "photo gallery" on the person
-        page doesn't need a second call. We return the raw dict; the API
-        route shapes it into a PersonResponse.
+        ``append_to_response=images,translations,combined_credits`` bundles
+        the profile photos, every localized biography (for the it→en bio
+        fallback) AND the full filmography into ONE round-trip. The route uses
+        the credits to derive the real profession (TMDB mislabels musicians /
+        personalities like Justin Bieber as "Acting").
         """
         return await self._get(
             f"/person/{person_id}",
-            {"append_to_response": "images"},
+            {"append_to_response": "images,translations,combined_credits"},
         )
 
     async def get_person_credits(self, person_id: int) -> dict:
@@ -528,6 +544,11 @@ class TmdbClient:
         for x in data.get("results", []):
             mt = x.get("media_type")
             if mt in ("movie", "tv"):
+                # Talk shows / news are mis-tagged as "serie tv" — keep them out.
+                if mt == "tv" and (
+                    set(x.get("genre_ids") or []) & _EXCLUDED_TV_GENRES
+                ):
+                    continue
                 titles.append(self._parse_search_or_collection_item(x))
             elif mt == "person":
                 person = self._parse_person(x)

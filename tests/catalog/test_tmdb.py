@@ -5,7 +5,27 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from streamload.catalog.tmdb import TmdbClient, TmdbItem, _rank_titles
+from streamload.catalog.tmdb import (
+    TmdbClient,
+    TmdbItem,
+    _quality_filter,
+    _rank_titles,
+)
+
+
+def test_quality_filter_drops_talk_shows_and_news():
+    items = [
+        TmdbItem(tmdb_id=1, media_type="movie", title="A Film",
+                 poster_url="https://img/a.jpg"),
+        TmdbItem(tmdb_id=2, media_type="tv", title="A Series",
+                 poster_url="https://img/b.jpg", genre_ids=[18]),
+        TmdbItem(tmdb_id=3, media_type="tv", title="Late Show",
+                 poster_url="https://img/c.jpg", genre_ids=[10767]),
+        TmdbItem(tmdb_id=4, media_type="tv", title="Nightly News",
+                 poster_url="https://img/d.jpg", genre_ids=[10763]),
+    ]
+    kept = {it.tmdb_id for it in _quality_filter(items)}
+    assert kept == {1, 2}
 
 
 def _mk_resp(json_payload: dict, status: int = 200):
@@ -370,10 +390,13 @@ async def test_get_person_returns_raw_dict():
     assert data["birthday"] == "1963-12-18"
     called_url = http.get.call_args[0][0]
     assert called_url.endswith("/person/287")
-    # Person endpoint asks for images via append_to_response to surface
-    # additional profile photos when present.
+    # Person endpoint bundles images + translations + combined_credits via
+    # append_to_response (photos, it→en bio fallback, profession derivation).
     called_params = http.get.call_args.kwargs.get("params", {})
-    assert called_params.get("append_to_response") == "images"
+    assert (
+        called_params.get("append_to_response")
+        == "images,translations,combined_credits"
+    )
 
 
 @pytest.mark.asyncio

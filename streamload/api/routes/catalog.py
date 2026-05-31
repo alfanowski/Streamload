@@ -287,7 +287,14 @@ async def _collect_pages(
     out: list[TmdbItem] = []
     page = start_page
     while len(out) < limit:
-        chunk = await fetch_page(page)
+        try:
+            chunk = await fetch_page(page)
+        except httpx.HTTPError as exc:
+            # TMDB unreachable / timed out / transient network blip. Degrade
+            # gracefully: return whatever we've gathered so far (empty → the
+            # client just renders no row) instead of 500-ing the whole screen.
+            log.warning("TMDB page fetch failed (page=%s): %r — serving %d cached/partial items", page, exc, len(out))
+            break
         if not chunk:
             break
         out.extend(chunk)
@@ -323,11 +330,122 @@ def _to_summary(item: TmdbItem) -> MediaSummaryResponse:
     )
 
 
+# TMDB TV genre IDs the platform never wants: Talk (10767) and News (10763).
+# These get mis-classified as "serie tv" and pollute filmographies and rows.
+_EXCLUDED_TV_GENRES = {10767, 10763}
+
+
 def _require_tmdb_key() -> str:
     api_key = os.environ.get("TMDB_API_KEY", "")
     if not api_key:
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "TMDB not configured")
     return api_key
+
+
+# TMDB biographies are community-contributed and frequently pasted from
+# Wikipedia, which leaves a CC-BY-SA attribution footer baked into the text
+# (in several languages). It's boilerplate the user should never see, so we
+# cut the bio at the first attribution marker.
+_WIKI_ATTRIBUTION_MARKERS = (
+    "Description above from the Wikipedia",
+    "La descrizione qui sopra deriva",
+    "from the Wikipedia article",
+    "Questo testo proviene dall'articolo di Wikipedia",
+    "Diese Beschreibung stammt aus dem Wikipedia",
+    "La description ci-dessus provient de l",
+)
+
+
+def _strip_wiki_attribution(bio: str) -> str:
+    cut = len(bio)
+    for marker in _WIKI_ATTRIBUTION_MARKERS:
+        idx = bio.find(marker)
+        if idx != -1:
+            cut = min(cut, idx)
+    return bio[:cut].strip()
+
+
+# Character strings that mark a NON-acting appearance (the person playing
+# themselves on a talk show, in a concert film, a documentary, etc.).
+_SELF_MARKERS = {
+    "self", "himself", "herself", "themselves", "host", "presenter",
+    "se stesso", "se stessa", "presentatore", "presentatrice", "narrator",
+    "narratore",
+}
+
+
+def _derive_department(credits: dict, fallback: str | None) -> str | None:
+    """Work out a person's REAL profession from their filmography.
+
+    TMDB's ``known_for_department`` mislabels musicians / personalities as
+    "Acting" the moment they appear as themselves once. We instead count their
+    actual work: real acting roles (a character that isn't "Self") vs. crew
+    departments. If neither dominates — i.e. they're mostly playing themselves —
+    we return None rather than claim a profession we can't stand behind.
+    """
+    cast = credits.get("cast") or []
+    crew = credits.get("crew") or []
+    real_acting = 0
+    self_appearances = 0
+    for c in cast:
+        if c.get("media_type") not in ("movie", "tv"):
+            continue
+        character = (c.get("character") or "").strip().lower()
+        words = set(character.replace("(", " ").replace(")", " ").split())
+        if not character or character in _SELF_MARKERS or words & _SELF_MARKERS:
+            self_appearances += 1
+        else:
+            real_acting += 1
+
+    crew_counts: dict[str, int] = {}
+    for cw in crew:
+        if cw.get("media_type") not in ("movie", "tv"):
+            continue
+        dept = cw.get("department")
+        if dept:
+            crew_counts[dept] = crew_counts.get(dept, 0) + 1
+    top_crew, top_n = None, 0
+    for dept, n in crew_counts.items():
+        if n > top_n:
+            top_crew, top_n = dept, n
+
+    # A clearly-dominant crew role wins (a director who barely acts).
+    if top_n > real_acting and top_n >= 2:
+        return top_crew
+    # A real body of acting work that isn't drowned out by Self appearances.
+    if real_acting >= 2 and real_acting >= self_appearances:
+        return "Acting"
+    # Inconclusive — mostly Self / too thin. Keep a strong non-Acting TMDB
+    # hint, but never assert "Acting" for someone who barely acts.
+    if fallback and fallback != "Acting":
+        return fallback
+    return None
+
+
+def _best_biography(data: dict) -> str | None:
+    """Pick + clean the best available biography for a person.
+
+    The text comes from the TMDB API (``/person/{id}``), localised to it-IT.
+    When the Italian bio is empty we fall back to the appended ``translations``
+    payload — but ONLY to Italian or English (an "any language" fallback
+    surfaced surreal Russian/Korean bios). The chosen bio is then stripped of
+    the Wikipedia CC-BY-SA attribution footer TMDB bakes into community text.
+    """
+    candidate = (data.get("biography") or "").strip()
+    if not candidate:
+        translations = (data.get("translations") or {}).get("translations") or []
+        by_lang: dict[str, str] = {}
+        for t in translations:
+            lang = t.get("iso_639_1")
+            bio = ((t.get("data") or {}).get("biography") or "").strip()
+            if lang and bio and lang not in by_lang:
+                by_lang[lang] = bio
+        for lang in ("it", "en"):
+            if by_lang.get(lang):
+                candidate = by_lang[lang]
+                break
+    candidate = _strip_wiki_attribution(candidate)
+    return candidate or None
 
 
 def _validate_media_type(value: str, *, allow_all: bool = False) -> str:
@@ -610,7 +728,7 @@ async def get_person(
         return PersonResponse(
             tmdb_id=int(data.get("id") or person_id),
             name=str(data.get("name") or ""),
-            biography=(data.get("biography") or None),
+            biography=_best_biography(data),
             birthday=data.get("birthday"),
             deathday=data.get("deathday"),
             place_of_birth=data.get("place_of_birth"),
@@ -618,7 +736,13 @@ async def get_person(
             # variant than the w185 thumbnails the CastCard uses.
             profile_url=tmdb.image_url(data.get("profile_path"), size="w500"),
             also_known_as=list(data.get("also_known_as") or []),
-            known_for_department=data.get("known_for_department"),
+            # Derived from the actual filmography (combined_credits, bundled via
+            # append_to_response) — TMDB's raw known_for_department mislabels
+            # musicians/personalities as "Acting".
+            known_for_department=_derive_department(
+                data.get("combined_credits") or {},
+                data.get("known_for_department"),
+            ),
         )
 
 
@@ -668,6 +792,12 @@ async def get_person_credits(
         raw = bundle["raw"]
         if media_type not in ("movie", "tv"):
             continue
+        # Drop talk shows / news — they're not real filmography (and the
+        # platform doesn't want them at all). TMDB tags them with these genres.
+        if media_type == "tv" and (
+            set(raw.get("genre_ids") or []) & _EXCLUDED_TV_GENRES
+        ):
+            continue
         # TV uses `name` + `first_air_date`; movies use `title` + `release_date`.
         title = (raw.get("title") if media_type == "movie" else raw.get("name")) or ""
         date_str = (
@@ -690,14 +820,32 @@ async def get_person_credits(
             backdrop_url=backdrop_url,
             character=raw.get("character") if bundle["from_cast"] else None,
         )
-        # Sort a person's filmography by RATING (vote_average), but gate on
-        # vote_count so a 10/10 with 3 votes can't top an acclaimed classic;
-        # popularity is the tiebreak. Best, most-loved work surfaces first.
+        # Base quality: rating (gated on vote_count) blended with popularity.
         rating = float(raw.get("vote_average") or 0.0)
         votes = int(raw.get("vote_count") or 0)
         popularity = float(raw.get("popularity") or 0.0)
         rating_score = rating if votes >= 50 else rating * (votes / 50.0)
-        items.append(((rating_score, popularity), item))
+        pop_norm = min(popularity / 20.0, 10.0)
+        quality = rating_score * 0.7 + pop_norm * 0.3
+
+        # Role PROMINENCE — lead roles must rank above bit parts. A person's
+        # billing `order` (0 = top-billed) drives this; crew credits (no order)
+        # sit mid-pack. A TV guest with a handful of episodes (e.g. Brad Pitt's
+        # one Friends appearance) is heavily demoted so cameos don't outrank the
+        # films they actually starred in.
+        order = raw.get("order")
+        if bundle["from_cast"] and order is not None:
+            prominence = max(0.0, 1.0 - int(order) / 12.0)
+        else:
+            prominence = 0.5
+        episode_count = raw.get("episode_count")
+        if media_type == "tv" and episode_count is not None and episode_count <= 3:
+            prominence *= 0.2
+
+        # Prominence scales quality so a starring role in a good film beats a
+        # cameo in a more popular one, while quality still separates the leads.
+        score = quality * (0.25 + 0.75 * prominence)
+        items.append((score, item))
 
     items.sort(key=lambda pair: pair[0], reverse=True)
-    return [item for _key, item in items]
+    return [item for _score, item in items]
