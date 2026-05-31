@@ -289,11 +289,18 @@ async def _collect_pages(
     while len(out) < limit:
         try:
             chunk = await fetch_page(page)
-        except httpx.HTTPError as exc:
-            # TMDB unreachable / timed out / transient network blip. Degrade
-            # gracefully: return whatever we've gathered so far (empty → the
-            # client just renders no row) instead of 500-ing the whole screen.
-            log.warning("TMDB page fetch failed (page=%s): %r — serving %d cached/partial items", page, exc, len(out))
+        except (httpx.TransportError, httpx.TimeoutException) as exc:
+            # ONLY transient network failures (connect/read timeout, DNS,
+            # connection reset) degrade gracefully — return what we have so a
+            # blip doesn't 500 the whole screen. We deliberately do NOT catch
+            # httpx.HTTPStatusError here: a 401/403/404 means the TMDB key is
+            # wrong/expired or the request is malformed — that must surface as
+            # a real error, not a silently-empty row that looks like "no
+            # content" and is impossible to diagnose.
+            log.warning(
+                "TMDB transient fetch failure (page=%s): %r — serving %d partial items",
+                page, exc, len(out),
+            )
             break
         if not chunk:
             break

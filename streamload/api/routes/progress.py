@@ -3,7 +3,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Query, Response
 from pydantic import BaseModel, Field
 from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert
@@ -104,6 +104,11 @@ async def continue_watching(user: CurrentUser, db: SessionDep) -> ContinueWatchi
         .where(WatchProgress.user_id == user.id)
         .where(WatchProgress.completed.is_(False))
         .order_by(WatchProgress.updated_at.desc())
+        # Bound the scan: a heavy user can have hundreds of in-progress episode
+        # rows (one per episode). We collapse to 20 TITLES below; 200 most-recent
+        # rows is far more than enough to yield 20 distinct titles, while keeping
+        # the query + JOIN from materialising the user's entire history in memory.
+        .limit(200)
     )
     rows = (await db.execute(stmt)).all()
 
@@ -144,7 +149,7 @@ async def get_progress(
     tmdb_id: int,
     user: CurrentUser,
     db: SessionDep,
-    media_type: str = "movie",
+    media_type: str = Query("movie", pattern="^(movie|tv)$"),
     season_number: int | None = None,
     episode_number: int | None = None,
 ) -> ResumeResponse | Response:
@@ -176,7 +181,7 @@ async def get_progress(
 @router.delete("/progress/continue-watching/{tmdb_id}")
 async def remove_continue_watching(
     tmdb_id: int,
-    media_type: str,
+    media_type: str = Query(..., pattern="^(movie|tv)$"),
     user: CurrentUser,
     db: SessionDep,
 ) -> dict[str, str]:
@@ -210,7 +215,7 @@ async def title_progress(
     tmdb_id: int,
     user: CurrentUser,
     db: SessionDep,
-    media_type: str = "tv",
+    media_type: str = Query("tv", pattern="^(movie|tv)$"),
 ) -> TitleProgressResponse:
     """EVERY saved episode's progress for a title — drives the title page's
     per-episode watch bars + "already watched" ticks (the platform's memory of
