@@ -181,9 +181,9 @@ async def get_progress(
 @router.delete("/progress/continue-watching/{tmdb_id}")
 async def remove_continue_watching(
     tmdb_id: int,
-    media_type: str = Query(..., pattern="^(movie|tv)$"),
     user: CurrentUser,
     db: SessionDep,
+    media_type: str = Query(..., pattern="^(movie|tv)$"),
 ) -> dict[str, str]:
     """Remove a title from the user's "Continua a guardare" row — deletes every
     episode's progress for that title (the long-press "Rimuovi dalla riga")."""
